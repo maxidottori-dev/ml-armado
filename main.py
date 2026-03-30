@@ -118,65 +118,57 @@ def split_pages(pdf_path):
 
 def extract_ids_from_labels(pdf_path, label_pages):
     """
-    Extract order IDs from label pages.
-    - FLEX: looks for 'Envio: XXXXXXX' pattern OR standalone 9-11 digit numbers
-    - COLECTA: looks for UUID patterns
-    Also detects envio type.
+    Extract order IDs and detect envio type from label pages.
+    
+    FLEX labels: contain 'Envio: XXXXXXX' — we extract those numbers.
+    COLECTA labels: do NOT contain UUIDs — UUIDs only appear in order pages.
+      For Colecta we detect type via absence of FLEX keyword, and return
+      empty set (UUIDs will be picked up directly from order pages).
     """
     envio_ids  = set()
-    uuid_ids   = set()
     envio_type = "Colecta"
 
     with pdfplumber.open(pdf_path) as pdf:
         for i in label_pages:
-            page = pdf.pages[i]
-            text = page.extract_text() or ""
-            words = page.extract_words()
+            text = pdf.pages[i].extract_text() or ""
+            words = pdf.pages[i].extract_words()
 
-            # Detect type
+            # Detect type — Flex labels always say FLEX or Envío Flex
             if any(k in text for k in ["Envío Flex", "Envio Flex", "FLEX"]):
                 envio_type = "Flex"
 
-            # Try Envio: pattern first (Flex style)
-            for m in re.finditer(r'Envio\s*[:\s]\s*(\d+)', text):
-                num = m.group(1).strip()
-                if len(num) >= 6:
-                    envio_ids.add(num)
-
-            # Also grab standalone 9-11 digit numbers from words (Flex fallback)
+            # For Flex: extract envio numbers (standalone 9-12 digit numbers on label)
+            # These appear as standalone numbers below the barcode
             for w in words:
                 clean = re.sub(r'\s+', '', w['text'])
                 nums = re.findall(r'\d{9,12}', clean)
                 for n in nums:
                     envio_ids.add(n)
 
-            # Look for UUIDs in words (Colecta style)
-            for w in words:
-                if is_uuid(w['text']):
-                    uuid_ids.add(w['text'])
+    return envio_ids, envio_type
 
-    # Combine all known IDs
-    all_ids = envio_ids | uuid_ids
-    return all_ids, envio_type
-
-def get_orders(page, known_ids, keywords):
+def get_orders(page, known_ids, keywords, envio_type="Flex"):
     words  = page.extract_words()
     page_h = page.height
     order_ids = []
 
-    for w in words:
-        text = w['text']
-        # Check direct match (UUID or number)
-        if (text in known_ids or is_uuid(text)) and w['x0'] < 200:
-            if not any(o['id'] == text for o in order_ids):
-                order_ids.append({'id': text, 'top': w['top']})
-            continue
-        # Check numbers embedded in word
-        nums = re.findall(r'\d{9,12}', text)
-        for num in nums:
-            if num in known_ids and w['x0'] < 200:
-                if not any(o['id'] == num for o in order_ids):
-                    order_ids.append({'id': num, 'top': w['top']})
+    if envio_type == "Colecta":
+        # For Colecta: anchor on UUIDs found directly in the order page left column
+        for w in words:
+            if is_uuid(w['text']) and w['x0'] < 220:
+                if not any(o['id'] == w['text'] for o in order_ids):
+                    order_ids.append({'id': w['text'], 'top': w['top'],
+                                      'id_x1': w['x1']})
+    else:
+        # For Flex: anchor on known envio IDs from label pages
+        for w in words:
+            text = w['text']
+            nums = re.findall(r'\d{9,12}', text)
+            for num in nums:
+                if num in known_ids and w['x0'] < 200:
+                    if not any(o['id'] == num for o in order_ids):
+                        order_ids.append({'id': num, 'top': w['top'],
+                                          'id_x1': w.get('x1', 90)})
 
     order_ids.sort(key=lambda x: x['top'])
 
@@ -224,7 +216,7 @@ def annotate_page(img, orders, order_number_start=1, font_size_num=30, font_size
     draw    = ImageDraw.Draw(img, 'RGBA')
     x_left  = int(28.3  * SCALE) - 4
     x_right = int(566.9 * SCALE) + 4
-    num_cx  = int(174   * SCALE)
+    PROD_COL_X = 260  # products column always starts at ~260pt
     font_num = load_font(font_size_num)
     font_lbl = load_font(font_size_lbl)
 
@@ -233,6 +225,9 @@ def annotate_page(img, orders, order_number_start=1, font_size_num=30, font_size
         y_top  = int(order['box_top'] * SCALE)
         y_bot  = int(order['box_bot'] * SCALE)
         num_cy = y_top + (y_bot - y_top) // 2
+        # Center number in the gap between ID col end and products col start
+        id_x1  = order.get('id_x1', 88)
+        num_cx = int(((id_x1 + PROD_COL_X) / 2) * SCALE)
 
         if order['labels']:
             draw.rectangle([x_left, y_top, x_right, y_bot], fill=(200, 200, 200, 80))
@@ -268,7 +263,7 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
     now_str = datetime.now(tz).strftime("%d/%m/%Y  %H:%M")
 
     with pdfplumber.open(pdf_path) as pdf:
-        all_orders = [get_orders(pdf.pages[i], known_ids, keywords) for i in order_page_idxs]
+        all_orders = [get_orders(pdf.pages[i], known_ids, keywords, envio_type) for i in order_page_idxs]
 
     total_orders = sum(len(o) for o in all_orders)
     total_pages  = len(order_page_idxs)
