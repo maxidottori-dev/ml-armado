@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ML Armado · Ingresar</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'IBM Plex Sans', sans-serif;
+    background: #f4f3ef;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .login-box {
+    background: white;
+    border: 1px solid #d8d5cc;
+    border-radius: 10px;
+    padding: 40px 36px;
+    width: 100%;
+    max-width: 380px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+  }
+
+  .logo {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .logo h1 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 18px;
+    font-weight: 600;
+    color: #1a1a18;
+    letter-spacing: 0.05em;
+  }
+  .logo p {
+    font-size: 12px;
+    color: #6b6a62;
+    margin-top: 4px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+  }
+  .form-group label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #6b6a62;
+    margin-bottom: 6px;
+  }
+  .form-group input {
+    width: 100%;
+    padding: 11px 14px;
+    border: 1px solid #d8d5cc;
+    border-radius: 6px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 15px;
+    color: #1a1a18;
+    transition: border-color 0.15s;
+    background: #fafaf8;
+  }
+  .form-group input:focus {
+    outline: none;
+    border-color: #1a1a18;
+    background: white;
+  }
+
+  .btn-login {
+    width: 100%;
+    padding: 13px;
+    background: #1a1a18;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: opacity 0.2s;
+    letter-spacing: 0.02em;
+  }
+  .btn-login:hover { opacity: 0.85; }
+  .btn-login:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .error-msg {
+    display: none;
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #8b1a1a;
+    margin-top: 12px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="login-box">
+  <div class="logo">
+    <h1>ML ARMADO</h1>
+    <p>Procesador de Hojas de Armado</p>
+  </div>
+
+  <div class="form-group">
+    <label>Usuario</label>
+    <input type="text" id="username" placeholder="Tu usuario" autocomplete="username">
+  </div>
+  <div class="form-group">
+    <label>Contraseña</label>
+    <input type="password" id="password" placeholder="Tu contraseña" autocomplete="current-password">
+  </div>
+
+  <button class="btn-login" id="btnLogin" onclick="doLogin()">Ingresar</button>
+  <div class="error-msg" id="errorMsg"></div>
+</div>
+
+<script>
+  // Allow Enter key to submit
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
+  });
+
+  async function doLogin() {
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    const btn      = document.getElementById('btnLogin');
+    const err      = document.getElementById('errorMsg');
+
+    if (!username || !password) {
+      err.style.display = 'block';
+      err.textContent = 'Completá usuario y contraseña.';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Ingresando...';
+    err.style.display = 'none';
+
+    const fd = new FormData();
+    fd.append('username', username);
+    fd.append('password', password);
+
+    try {
+      const r = await fetch('/api/login', { method: 'POST', body: fd });
+      const data = await r.json();
+
+      if (data.ok) {
+        window.location.href = '/';
+      } else {
+        err.style.display = 'block';
+        err.textContent = data.error || 'Usuario o contraseña incorrectos.';
+        btn.disabled = false;
+        btn.textContent = 'Ingresar';
+      }
+    } catch(e) {
+      err.style.display = 'block';
+      err.textContent = 'Error de conexión. Intentá de nuevo.';
+      btn.disabled = false;
+      btn.textContent = 'Ingresar';
+    }
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ML Armado · Procesador</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f3ef;
+    --surface: #ffffff;
+    --border: #d8d5cc;
+    --border-dark: #999890;
+    --text: #1a1a18;
+    --text-muted: #6b6a62;
+    --accent: #1a1a18;
+    --accent-light: #e8e6df;
+    --flag: #1a1a18;
+    --flag-bg: #f0ede4;
+    --success: #2d6a2d;
+    --danger: #8b1a1a;
+    --flex-color: #1a3a5c;
+    --colecta-color: #3a1a5c;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 16px rgba(0,0,0,0.06);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'IBM Plex Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  .app-header {
+    background: var(--accent);
+    color: white;
+    padding: 16px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .app-header h1 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+  }
+  .app-header .subtitle {
+    font-size: 12px;
+    opacity: 0.5;
+    font-weight: 300;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .header-date {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    opacity: 0.6;
+  }
+
+  /* ── Layout ── */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 24px;
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 24px;
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    box-shadow: var(--shadow);
+  }
+  .card-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── Counters ── */
+  .counters {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .counter-box {
+    background: var(--accent-light);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+    text-align: center;
+  }
+  .counter-box .label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .counter-box .value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .counter-box.flex .value { color: var(--flex-color); }
+  .counter-box.colecta .value { color: var(--colecta-color); }
+  .counter-box .next-hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  /* ── Next number editor ── */
+  .next-number-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+    background: var(--flag-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+  }
+  .next-number-row label {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex: 1;
+  }
+  .next-number-row input[type=number] {
+    width: 80px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-dark);
+    border-radius: 4px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 16px;
+    font-weight: 600;
+    text-align: center;
+    background: white;
+  }
+  .btn-small {
+    padding: 6px 14px;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 600;
+  }
+  .btn-small:hover { opacity: 0.85; }
+
+  /* ── Upload zone ── */
+  .upload-zone {
+    border: 2px dashed var(--border-dark);
+    border-radius: 8px;
+    padding: 40px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--accent-light);
+    position: relative;
+  }
+  .upload-zone:hover, .upload-zone.drag-over {
+    border-color: var(--accent);
+    background: #eae8e0;
+  }
+  .upload-zone input[type=file] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }
+  .upload-icon { font-size: 36px; margin-bottom: 12px; }
+  .upload-zone .upload-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+  .upload-zone .upload-sub { font-size: 12px; color: var(--text-muted); }
+  .upload-zone .file-selected {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--success);
+    margin-top: 10px;
+    font-weight: 600;
+  }
+
+  /* ── Form fields ── */
+  .form-group { margin-bottom: 16px; }
+  .form-group label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .form-group input, .form-group textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    background: white;
+    color: var(--text);
+    transition: border-color 0.15s;
+  }
+  .form-group input:focus, .form-group textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .form-group .hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  /* ── Submit button ── */
+  .btn-process {
+    width: 100%;
+    padding: 14px;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: 0.03em;
+    transition: opacity 0.2s;
+    margin-top: 8px;
+  }
+  .btn-process:hover { opacity: 0.88; }
+  .btn-process:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── Progress / Result ── */
+  .processing-state {
+    display: none;
+    text-align: center;
+    padding: 20px;
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+  .spinner {
+    display: inline-block;
+    width: 20px; height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .result-box {
+    display: none;
+    margin-top: 20px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .result-header {
+    background: var(--accent);
+    color: white;
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .result-header .result-title { font-weight: 700; font-size: 14px; }
+  .result-header .result-badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    background: rgba(255,255,255,0.15);
+    padding: 3px 10px;
+    border-radius: 20px;
+  }
+  .result-body { padding: 18px; }
+  .result-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .stat-item {
+    text-align: center;
+    background: var(--accent-light);
+    padding: 10px;
+    border-radius: 6px;
+  }
+  .stat-item .sv { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 600; }
+  .stat-item .sl { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+
+  .flagged-list { margin-bottom: 16px; }
+  .flagged-list .fl-title {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px;
+  }
+  .flagged-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px;
+    background: var(--flag-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-bottom: 4px;
+    font-size: 12px;
+  }
+  .flagged-item .fn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    width: 28px;
+    text-align: center;
+    background: var(--accent);
+    color: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+  .flagged-item .fid { font-family: 'IBM Plex Mono', monospace; color: var(--text-muted); font-size: 11px; flex:1; }
+  .flagged-item .flabel { font-weight: 600; font-size: 11px; }
+
+  .btn-download {
+    width: 100%;
+    padding: 12px;
+    background: var(--success);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    font-family: 'IBM Plex Sans', sans-serif;
+    transition: opacity 0.2s;
+  }
+  .btn-download:hover { opacity: 0.88; }
+
+  /* ── Sidebar ── */
+  .sidebar { display: flex; flex-direction: column; gap: 20px; }
+
+  /* ── History ── */
+  .history-item {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .history-item:hover { background: var(--accent-light); }
+  .history-item .hi-top {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;
+  }
+  .history-item .hi-name {
+    font-size: 12px; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px;
+  }
+  .history-item .hi-time { font-size: 11px; color: var(--text-muted); font-family: 'IBM Plex Mono', monospace; }
+  .history-item .hi-meta { font-size: 11px; color: var(--text-muted); }
+  .badge-type {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    margin-right: 6px;
+  }
+  .badge-flex { background: #dbeafe; color: var(--flex-color); }
+  .badge-colecta { background: #ede9fe; color: var(--colecta-color); }
+
+  /* ── Reset button ── */
+  .btn-reset {
+    width: 100%;
+    padding: 8px;
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: 'IBM Plex Sans', sans-serif;
+    transition: all 0.15s;
+  }
+  .btn-reset:hover { background: var(--danger); color: white; }
+
+  /* ── Error ── */
+  .error-box {
+    display: none;
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--danger);
+    margin-top: 12px;
+  }
+
+  @media (max-width: 768px) {
+    .container { grid-template-columns: 1fr; }
+    .counters { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <div>
+    <h1>ML ARMADO · PROCESADOR</h1>
+    <div class="subtitle">Mercado Libre · Hojas de Armado</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:16px">
+    <div class="header-date" id="headerDate"></div>
+    <div style="font-size:12px;opacity:0.5;font-family:'IBM Plex Mono',monospace" id="headerUser"></div>
+    <button onclick="doLogout()" style="padding:5px 14px;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.25);border-radius:4px;color:white;font-size:11px;cursor:pointer;font-family:'IBM Plex Sans',sans-serif;font-weight:600;letter-spacing:0.05em">SALIR</button>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- ── Main Column ── -->
+  <div class="main-col">
+
+    <!-- Daily Counters -->
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-title">Resumen del día</div>
+      <div class="counters">
+        <div class="counter-box flex">
+          <div class="label">Flex</div>
+          <div class="value" id="cntFlex">0</div>
+        </div>
+        <div class="counter-box colecta">
+          <div class="label">Colecta</div>
+          <div class="value" id="cntColecta">0</div>
+        </div>
+        <div class="counter-box">
+          <div class="label">Total</div>
+          <div class="value" id="cntTotal">0</div>
+        </div>
+      </div>
+
+      <!-- Next number editor -->
+      <div class="next-number-row">
+        <label>Próximo número de pedido a usar:</label>
+        <input type="number" id="nextNumberInput" min="1" value="1">
+        <button class="btn-small" onclick="saveNextNumber()">Guardar</button>
+      </div>
+      <button class="btn-reset" onclick="confirmReset()">↺ Reiniciar contadores del día</button>
+    </div>
+
+    <!-- Upload & Process -->
+    <div class="card">
+      <div class="card-title">Procesar PDF</div>
+
+      <div class="upload-zone" id="uploadZone">
+        <input type="file" id="fileInput" accept=".pdf" onchange="onFileSelect(this)">
+        <div class="upload-icon">📄</div>
+        <div class="upload-title">Arrastrá el PDF aquí</div>
+        <div class="upload-sub">o hacé click para seleccionar</div>
+        <div class="file-selected" id="fileSelected"></div>
+      </div>
+
+      <div style="margin-top:20px">
+        <div class="form-group">
+          <label>Palabras clave a destacar</label>
+          <textarea id="keywords" rows="2" style="resize:vertical">agitador, agitadores, collarin, collarín, collarines</textarea>
+          <div class="hint">Separadas por coma · sin distinción de mayúsculas ni acentos</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label>Arrancar desde el nro.</label>
+            <input type="number" id="startNumber" min="1" value="1">
+            <div class="hint">Sugerido por el sistema</div>
+          </div>
+          <div class="form-group">
+            <label>Offset encabezado (px)</label>
+            <input type="number" id="headerOffset" min="0" max="100" value="20">
+            <div class="hint">Ajuste para tu impresora</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label>Tamaño nro. de pedido (pt)</label>
+            <input type="number" id="fontSizeNum" min="8" max="48" value="30">
+            <div class="hint">Número en el espacio central</div>
+          </div>
+          <div class="form-group">
+            <label>Tamaño etiqueta destacado (pt)</label>
+            <input type="number" id="fontSizeLbl" min="8" max="36" value="25">
+            <div class="hint">! AGITADORES ! etc.</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn-process" id="btnProcess" onclick="processFile()" disabled>
+        Procesar PDF
+      </button>
+
+      <div class="processing-state" id="processingState">
+        <span class="spinner"></span> Procesando... esto puede tardar unos segundos
+      </div>
+
+      <div class="error-box" id="errorBox"></div>
+
+      <!-- Result -->
+      <div class="result-box" id="resultBox">
+        <div class="result-header">
+          <div class="result-title" id="resultTitle">PDF procesado</div>
+          <div class="result-badge" id="resultBadge"></div>
+        </div>
+        <div class="result-body">
+          <div class="result-stats">
+            <div class="stat-item">
+              <div class="sv" id="rTotal">0</div>
+              <div class="sl">Pedidos</div>
+            </div>
+            <div class="stat-item">
+              <div class="sv" id="rFrom">1</div>
+              <div class="sl">Desde</div>
+            </div>
+            <div class="stat-item">
+              <div class="sv" id="rTo">1</div>
+              <div class="sl">Hasta</div>
+            </div>
+          </div>
+
+          <div class="flagged-list" id="flaggedList"></div>
+
+          <button class="btn-download" id="btnDownload" onclick="downloadResult()">
+            ⬇ Descargar PDF procesado
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Sidebar ── -->
+  <div class="sidebar">
+    <div class="card">
+      <div class="card-title">Historial del día</div>
+      <div id="historyList"><div style="font-size:13px;color:var(--text-muted)">Sin procesar aún hoy.</div></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let currentOutput = null;
+
+// ── Init ────────────────────────────────────────────────
+async function loadState() {
+  const r = await fetch('/api/state');
+  const s = await r.json();
+  applyState(s);
+}
+
+function applyState(s) {
+  document.getElementById('cntFlex').textContent    = s.flex_count;
+  document.getElementById('cntColecta').textContent = s.colecta_count;
+  document.getElementById('cntTotal').textContent   = s.flex_count + s.colecta_count;
+  document.getElementById('nextNumberInput').value  = s.next_number;
+  document.getElementById('startNumber').value      = s.next_number;
+
+  const hl = document.getElementById('historyList');
+  if (!s.history || s.history.length === 0) {
+    hl.innerHTML = '<div style="font-size:13px;color:var(--text-muted)">Sin procesar aún hoy.</div>';
+    return;
+  }
+  hl.innerHTML = s.history.map(h => `
+    <div class="history-item" onclick="downloadFile('${h.output}')">
+      <div class="hi-top">
+        <span class="hi-name">${h.filename}</span>
+        <span class="hi-time">${h.time}</span>
+      </div>
+      <div class="hi-meta">
+        <span class="badge-type badge-${h.envio_type.toLowerCase()}">${h.envio_type}</span>
+        ${h.total_orders} pedidos · #${h.start_number}–${h.end_number}
+        ${h.flagged_count > 0 ? `· <b>${h.flagged_count} marcados</b>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── File select ─────────────────────────────────────────
+function onFileSelect(input) {
+  if (input.files && input.files[0]) {
+    document.getElementById('fileSelected').textContent = '✓ ' + input.files[0].name;
+    document.getElementById('btnProcess').disabled = false;
+    document.getElementById('resultBox').style.display = 'none';
+    document.getElementById('errorBox').style.display = 'none';
+  }
+}
+
+// Drag and drop
+const zone = document.getElementById('uploadZone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+zone.addEventListener('drop', e => {
+  e.preventDefault();
+  zone.classList.remove('drag-over');
+  const fi = document.getElementById('fileInput');
+  fi.files = e.dataTransfer.files;
+  onFileSelect(fi);
+});
+
+// ── Process ─────────────────────────────────────────────
+async function processFile() {
+  const file = document.getElementById('fileInput').files[0];
+  if (!file) return;
+
+  const keywords = document.getElementById('keywords').value;
+  const startNumber  = parseInt(document.getElementById('startNumber').value)  || 1;
+  const headerOffset = parseInt(document.getElementById('headerOffset').value) || 20;
+  const fontSizeNum  = parseInt(document.getElementById('fontSizeNum').value)  || 20;
+  const fontSizeLbl  = parseInt(document.getElementById('fontSizeLbl').value)  || 15;
+
+  document.getElementById('btnProcess').disabled = true;
+  document.getElementById('processingState').style.display = 'block';
+  document.getElementById('resultBox').style.display = 'none';
+  document.getElementById('errorBox').style.display = 'none';
+
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('keywords', keywords);
+  fd.append('start_number', startNumber);
+  fd.append('header_offset', headerOffset);
+  fd.append('font_size_num', fontSizeNum);
+  fd.append('font_size_lbl', fontSizeLbl);
+
+  try {
+    const r = await fetch('/api/process', { method: 'POST', body: fd });
+    const data = await r.json();
+
+    if (!r.ok) throw new Error(data.detail || 'Error al procesar');
+
+    currentOutput = data.filename;
+    showResult(data);
+    applyState(data.state);
+
+  } catch(e) {
+    document.getElementById('errorBox').style.display = 'block';
+    document.getElementById('errorBox').textContent = '⚠ ' + e.message;
+  } finally {
+    document.getElementById('processingState').style.display = 'none';
+    document.getElementById('btnProcess').disabled = false;
+  }
+}
+
+function showResult(data) {
+  document.getElementById('resultBox').style.display = 'block';
+  document.getElementById('resultTitle').textContent = `PDF procesado · ${data.envio_type}`;
+  document.getElementById('resultBadge').textContent = `${data.total_orders} pedidos`;
+  document.getElementById('rTotal').textContent = data.total_orders;
+  document.getElementById('rFrom').textContent  = data.start_number;
+  document.getElementById('rTo').textContent    = data.end_number;
+
+  const fl = document.getElementById('flaggedList');
+  if (data.flagged && data.flagged.length > 0) {
+    fl.innerHTML = `<div class="fl-title">⚠ ${data.flagged.length} pedido${data.flagged.length>1?'s':''} destacado${data.flagged.length>1?'s':''}</div>` +
+      data.flagged.map(f => `
+        <div class="flagged-item">
+          <span class="fn">${f.num}</span>
+          <span class="fid">${f.id}</span>
+          <span class="flabel">${f.labels.join(', ')}</span>
+        </div>`).join('');
+  } else {
+    fl.innerHTML = '<div style="font-size:13px;color:var(--text-muted);margin-bottom:12px">Sin productos destacados en este lote.</div>';
+  }
+}
+
+function downloadResult() {
+  if (currentOutput) downloadFile(currentOutput);
+}
+
+function downloadFile(filename) {
+  window.open(`/api/download/${filename}`, '_blank');
+}
+
+// ── Next number ─────────────────────────────────────────
+async function saveNextNumber() {
+  const n = parseInt(document.getElementById('nextNumberInput').value) || 1;
+  const r = await fetch('/api/next-number', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({number: n})
+  });
+  const s = await r.json();
+  applyState(s);
+  document.getElementById('startNumber').value = n;
+  // brief visual feedback
+  const btn = event.target;
+  btn.textContent = '✓';
+  setTimeout(() => btn.textContent = 'Guardar', 1200);
+}
+
+// ── Reset ────────────────────────────────────────────────
+async function confirmReset() {
+  if (!confirm('¿Reiniciar todos los contadores del día? Se perderá el historial.')) return;
+  await fetch('/api/reset', {method: 'POST'});
+  await loadState();
+  currentOutput = null;
+  document.getElementById('resultBox').style.display = 'none';
+}
+
+// ── Clock ────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const s = now.toLocaleString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    day:'2-digit', month:'2-digit', year:'numeric',
+    hour:'2-digit', minute:'2-digit'
+  });
+  document.getElementById('headerDate').textContent = s;
+}
+updateClock();
+setInterval(updateClock, 30000);
+
+// ── Logout ──────────────────────────────────────────────
+async function doLogout() {
+  await fetch('/api/logout', { method: 'POST' });
+  window.location.href = '/';
+}
+
+// ── Check auth & load user ───────────────────────────────
+async function init() {
+  try {
+    const r = await fetch('/api/me');
+    if (!r.ok) { window.location.href = '/'; return; }
+    const data = await r.json();
+    document.getElementById('headerUser').textContent = data.username;
+  } catch(e) {
+    window.location.href = '/';
+  }
+  loadState();
+}
+
+// ── Start ────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
