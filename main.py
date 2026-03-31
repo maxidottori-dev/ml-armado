@@ -25,6 +25,20 @@ UPLOADS.mkdir(exist_ok=True)
 OUTPUTS.mkdir(exist_ok=True)
 
 SESSIONS: dict = {}
+SESSIONS_FILE = BASE / "sessions.json"
+
+def load_sessions():
+    global SESSIONS
+    if SESSIONS_FILE.exists():
+        try:
+            SESSIONS = json.loads(SESSIONS_FILE.read_text())
+        except Exception:
+            SESSIONS = {}
+
+def save_sessions():
+    SESSIONS_FILE.write_text(json.dumps(SESSIONS, ensure_ascii=False))
+
+load_sessions()
 
 app = FastAPI(title="ML Armado Processor")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -147,6 +161,25 @@ def extract_ids_from_labels(pdf_path, label_pages):
 
 GAP_THRESHOLD = 8  # pt mínimo de separación vertical para nuevo pedido
 
+def is_order_header(word_text, next_left_word_text):
+    """
+    Un word de la col izquierda es encabezado de pedido si:
+    - es UUID, O
+    - la siguiente palabra de la col izquierda empieza con Pack o Venta:
+    (esto detecta códigos de transportista como EC3EX20370482, MEL..., etc.)
+    """
+    if is_uuid(word_text):
+        return True
+    if next_left_word_text and next_left_word_text.startswith(('Pack', 'Venta:')):
+        # Excluir palabras que claramente no son IDs de pedido
+        t = word_text
+        if any(t.startswith(x) for x in ('SKU:', 'Color:', 'Cantidad:', 'ID:', 'Nombre')):
+            return False
+        if len(t) < 5:
+            return False
+        return True
+    return False
+
 def get_orders(page, known_ids, keywords, envio_type="Flex"):
     words  = page.extract_words()
     page_h = page.height
@@ -159,11 +192,13 @@ def get_orders(page, known_ids, keywords, envio_type="Flex"):
             key=lambda w: w['top']
         )
         prev_bot = None
-        for w in left_words:
-            if is_uuid(w['text']):
+        for idx, w in enumerate(left_words):
+            next_w = left_words[idx + 1] if idx + 1 < len(left_words) else None
+            next_text = next_w['text'] if next_w else None
+
+            if is_order_header(w['text'], next_text):
                 gap = (w['top'] - prev_bot) if prev_bot is not None else 999.0
                 already = any(o['id'] == w['text'] for o in order_ids)
-                # Nuevo pedido si hay gap suficiente O es el primero
                 if (gap >= GAP_THRESHOLD or not order_ids) and not already:
                     order_ids.append({'id': w['text'], 'top': w['top'],
                                       'id_x1': w['x1']})
@@ -332,14 +367,17 @@ async def login(request: Request, username: str = Form(...), password: str = For
         return JSONResponse({"ok": False, "error": "Usuario o contraseña incorrectos"}, status_code=401)
     token = secrets.token_hex(32)
     SESSIONS[token] = username
+    save_sessions()
     response = JSONResponse({"ok": True, "username": username})
-    response.set_cookie("session_token", token, httponly=True, max_age=60*60*12)
+    response.set_cookie("session_token", token, httponly=True, max_age=60*60*12, samesite="lax")
     return response
 
 @app.post("/api/logout")
 def logout(request: Request):
     token = request.cookies.get("session_token")
-    if token: SESSIONS.pop(token, None)
+    if token:
+        SESSIONS.pop(token, None)
+        save_sessions()
     response = JSONResponse({"ok": True})
     response.delete_cookie("session_token")
     return response

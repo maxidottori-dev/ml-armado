@@ -155,19 +155,20 @@
 
     try {
       const r = await fetch('/api/login', { method: 'POST', body: fd });
-      const data = await r.json();
+      let data = {};
+      try { data = await r.json(); } catch(_) {}
 
       if (data.ok) {
         window.location.href = '/';
       } else {
         err.style.display = 'block';
-        err.textContent = data.error || 'Usuario o contraseña incorrectos.';
+        err.textContent = data.error || `Error ${r.status}. Revisá usuario y contraseña.`;
         btn.disabled = false;
         btn.textContent = 'Ingresar';
       }
     } catch(e) {
       err.style.display = 'block';
-      err.textContent = 'Error de conexión. Intentá de nuevo.';
+      err.textContent = 'No se pudo conectar con el servidor. Intentá de nuevo.';
       btn.disabled = false;
       btn.textContent = 'Ingresar';
     }
