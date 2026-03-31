@@ -155,7 +155,8 @@ def extract_ids_from_labels(pdf_path, label_pages):
                 clean = re.sub(r'\s+', '', w['text'])
                 nums = re.findall(r'\d{9,12}', clean)
                 for n in nums:
-                    envio_ids.add(n)
+                    if n.startswith('46'):  # solo IDs Flex reales
+                        envio_ids.add(n)
 
     return envio_ids, envio_type
 
@@ -211,7 +212,7 @@ def get_orders(page, known_ids, keywords, envio_type="Flex"):
             text = w['text']
             nums = re.findall(r'\d{9,12}', text)
             for num in nums:
-                if num in known_ids and w['x0'] < 200:
+                if num in known_ids and num.startswith('46') and w['x0'] < 200:
                     if not any(o['id'] == num for o in order_ids):
                         order_ids.append({'id': num, 'top': w['top'],
                                           'id_x1': w.get('x1', 90)})
