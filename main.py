@@ -97,12 +97,16 @@ def load_font(size):
     return ImageFont.load_default()
 
 # ── UUID detection ────────────────────────────────────────
-UUID_PATTERN = re.compile(
-    r'^[0-9a-fA-Ffi]{6,10}-[0-9a-fA-Ffi]{3,6}-[0-9a-fA-Ffi]{3,6}-[0-9a-fA-Ffi]{3,6}-[0-9a-fA-Ffi]{9,15}$'
-)
-
 def is_uuid(text):
-    return bool(UUID_PATTERN.match(text))
+    """Detecta UUIDs tolerando ligadura 'fi' del extractor de PDF."""
+    if text.startswith('SKU:') or text.startswith('MEL'):
+        return False
+    if text.count('-') != 4:
+        return False
+    if len(text) < 30 or len(text) > 50:
+        return False
+    allowed = set('0123456789abcdefABCDEFfi-')
+    return all(c in allowed for c in text)
 
 # ── PDF Analysis ──────────────────────────────────────────
 def split_pages(pdf_path):
@@ -118,12 +122,9 @@ def split_pages(pdf_path):
 
 def extract_ids_from_labels(pdf_path, label_pages):
     """
-    Extract order IDs and detect envio type from label pages.
-    
-    FLEX labels: contain 'Envio: XXXXXXX' — we extract those numbers.
-    COLECTA labels: do NOT contain UUIDs — UUIDs only appear in order pages.
-      For Colecta we detect type via absence of FLEX keyword, and return
-      empty set (UUIDs will be picked up directly from order pages).
+    Detecta tipo de envío y extrae IDs de etiquetas.
+    Colecta: UUIDs están solo en páginas de armado, no en etiquetas.
+    Flex: los IDs numéricos (466xxxxxxx) aparecen en etiquetas.
     """
     envio_ids  = set()
     envio_type = "Colecta"
@@ -133,12 +134,9 @@ def extract_ids_from_labels(pdf_path, label_pages):
             text = pdf.pages[i].extract_text() or ""
             words = pdf.pages[i].extract_words()
 
-            # Detect type — Flex labels always say FLEX or Envío Flex
             if any(k in text for k in ["Envío Flex", "Envio Flex", "FLEX"]):
                 envio_type = "Flex"
 
-            # For Flex: extract envio numbers (standalone 9-12 digit numbers on label)
-            # These appear as standalone numbers below the barcode
             for w in words:
                 clean = re.sub(r'\s+', '', w['text'])
                 nums = re.findall(r'\d{9,12}', clean)
@@ -147,20 +145,33 @@ def extract_ids_from_labels(pdf_path, label_pages):
 
     return envio_ids, envio_type
 
+GAP_THRESHOLD = 8  # pt mínimo de separación vertical para nuevo pedido
+
 def get_orders(page, known_ids, keywords, envio_type="Flex"):
     words  = page.extract_words()
     page_h = page.height
     order_ids = []
 
     if envio_type == "Colecta":
-        # For Colecta: anchor on UUIDs found directly in the order page left column
-        for w in words:
-            if is_uuid(w['text']) and w['x0'] < 220:
-                if not any(o['id'] == w['text'] for o in order_ids):
+        # Columna izquierda ordenada por posición vertical
+        left_words = sorted(
+            [w for w in words if w['x0'] < 220],
+            key=lambda w: w['top']
+        )
+        prev_bot = None
+        for w in left_words:
+            if is_uuid(w['text']):
+                gap = (w['top'] - prev_bot) if prev_bot is not None else 999.0
+                already = any(o['id'] == w['text'] for o in order_ids)
+                # Nuevo pedido si hay gap suficiente O es el primero
+                if (gap >= GAP_THRESHOLD or not order_ids) and not already:
                     order_ids.append({'id': w['text'], 'top': w['top'],
                                       'id_x1': w['x1']})
+            # Actualizar prev_bot con cualquier word de columna izquierda
+            if prev_bot is None or w['bottom'] > prev_bot:
+                prev_bot = w['bottom']
     else:
-        # For Flex: anchor on known envio IDs from label pages
+        # Flex: anclar en IDs numéricos conocidos de las etiquetas
         for w in words:
             text = w['text']
             nums = re.findall(r'\d{9,12}', text)
@@ -256,8 +267,9 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
         raise ValueError("No se encontraron páginas de armado en el PDF.")
 
     known_ids, envio_type = extract_ids_from_labels(pdf_path, label_pages)
-    if not known_ids:
-        raise ValueError("No se pudieron detectar IDs de pedido en las etiquetas.")
+    # Para Colecta los UUIDs están en la página de armado, no en etiquetas → ok si known_ids está vacío
+    if not known_ids and envio_type == "Flex":
+        raise ValueError("No se pudieron detectar IDs de pedido en las etiquetas (Flex).")
 
     tz      = timezone(timedelta(hours=-3))
     now_str = datetime.now(tz).strftime("%d/%m/%Y  %H:%M")
