@@ -128,7 +128,7 @@ def split_pages(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages):
             text = page.extract_text() or ""
-            if "Identif" in text and "Productos" in text:
+            if "Identif" in text and "Producto" in text:  # cubre "Producto" y "Productos"
                 order_pages.append(i)
             else:
                 label_pages.append(i)

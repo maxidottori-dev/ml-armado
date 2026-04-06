@@ -154,12 +154,12 @@
     fd.append('password', password);
 
     try {
-      const r = await fetch('/api/login', { method: 'POST', body: fd });
+      const r = await fetch('/api/login', { method: 'POST', body: fd, credentials: 'same-origin' });
       let data = {};
       try { data = await r.json(); } catch(_) {}
 
       if (data.ok) {
-        window.location.href = '/';
+        window.location.replace('/');
       } else {
         err.style.display = 'block';
         err.textContent = data.error || `Error ${r.status}. Revisá usuario y contraseña.`;
