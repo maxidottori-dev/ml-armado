@@ -296,6 +296,48 @@ def annotate_page(img, orders, order_number_start=1, font_size_num=30, font_size
             draw.text((num_cx-nw//2, num_cy-nh//2), str(num), fill=(0,0,0,255), font=font_num)
     return img
 
+
+def annotate_label_page(img, order_num, font_size_num=30):
+    """
+    Agrega el número de pedido centrado en el espacio libre superior derecho
+    de la etiqueta (derecha del bloque de texto del remitente, arriba de
+    la fila FLEX/XBA3-Despachar).
+    Zona libre: x 170-283.5pt, y 10-75pt (igual en Flex y Colecta).
+    """
+    draw = ImageDraw.Draw(img, 'RGBA')
+    # Fuente 20% más grande que el armado; auto-reduce si no entra
+    font_size = int(font_size_num * 1.2)
+    font = load_font(font_size)
+
+    text = str(order_num)
+
+    # Zona libre en píxeles
+    zone_x1 = int(170 * SCALE)
+    zone_x2 = img.width - int(4 * SCALE)
+    zone_y1 = int(10 * SCALE)
+    zone_y2 = int(74 * SCALE)
+    zone_w = zone_x2 - zone_x1
+    zone_h = zone_y2 - zone_y1
+
+    # Auto-reducir fuente si el número no entra (ej. 3 cifras con fuente grande)
+    while font_size > 10:
+        bb = font.getbbox(text)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        if tw <= zone_w and th <= zone_h:
+            break
+        font_size -= 2
+        font = load_font(font_size)
+
+    bb = font.getbbox(text)
+    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+
+    # Centrar en la zona libre
+    x = zone_x1 + (zone_w - tw) // 2
+    y = zone_y1 + (zone_h - th) // 2
+
+    draw.text((x, y), text, fill=(0, 0, 0, 255), font=font)
+    return img
+
 # ── Main processor ────────────────────────────────────────
 def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_num=30, font_size_lbl=25):
     label_pages, order_page_idxs = split_pages(pdf_path)
@@ -316,28 +358,50 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
     total_orders = sum(len(o) for o in all_orders)
     total_pages  = len(order_page_idxs)
 
-    pages_img = convert_from_path(pdf_path, dpi=DPI,
-                                  first_page=order_page_idxs[0]+1,
-                                  last_page=order_page_idxs[-1]+1)
+    # Renderizar TODAS las páginas del PDF original
+    all_pages_img = convert_from_path(pdf_path, dpi=DPI)
 
-    PAGE_W, PAGE_H = 595.28, 841.89
     out_name = f"armado_{datetime.now(tz).strftime('%Y%m%d_%H%M%S')}.pdf"
     out_path = str(OUTPUTS / out_name)
-    c = canvas.Canvas(out_path, pagesize=(PAGE_W, PAGE_H))
+    c = canvas.Canvas(out_path)
 
-    counter = start_number
-    for idx, (img, orders) in enumerate(zip(pages_img, all_orders)):
-        ann = annotate_page(img.copy(), orders, order_number_start=counter,
-                            font_size_num=font_size_num, font_size_lbl=font_size_lbl)
-        ann = add_header_overlay(ann, now_str, idx+1, total_pages,
-                                 total_orders, envio_type, offset_y=header_offset)
-        iw, ih = ann.size
-        scale  = min(PAGE_W/iw, PAGE_H/ih)
-        dw, dh = iw*scale, ih*scale
+    # Construir mapa: índice de página → número de pedido (para etiquetas)
+    # Las etiquetas aparecen en el mismo orden que los pedidos en el armado
+    label_to_order = {}
+    order_counter = start_number
+    for orders in all_orders:
+        for _ in orders:
+            if len(label_to_order) < len(label_pages):
+                label_to_order[label_pages[len(label_to_order)]] = order_counter
+            order_counter += 1
+
+    armado_counter = start_number
+    armado_page_num = 0
+    for page_idx, img in enumerate(all_pages_img):
+        iw_pt = img.width * 72 / DPI
+        ih_pt = img.height * 72 / DPI
+        c.setPageSize((iw_pt, ih_pt))
+
+        if page_idx in order_page_idxs:
+            # Página de armado — anotar pedidos y encabezado
+            orders = all_orders[order_page_idxs.index(page_idx)]
+            ann = annotate_page(img.copy(), orders, order_number_start=armado_counter,
+                                font_size_num=font_size_num, font_size_lbl=font_size_lbl)
+            ann = add_header_overlay(ann, now_str, armado_page_num + 1, total_pages,
+                                     total_orders, envio_type, offset_y=header_offset)
+            armado_counter += len(orders)
+            armado_page_num += 1
+        elif page_idx in label_pages:
+            # Página de etiqueta — agregar número de pedido
+            order_num = label_to_order.get(page_idx, "?")
+            ann = annotate_label_page(img.copy(), order_num, font_size_num=font_size_num)
+        else:
+            ann = img.copy()
+
         buf = io.BytesIO(); ann.save(buf, format='PNG'); buf.seek(0)
-        c.drawImage(ImageReader(buf), (PAGE_W-dw)/2, (PAGE_H-dh)/2, width=dw, height=dh)
+        c.drawImage(ImageReader(buf), 0, 0, width=iw_pt, height=ih_pt)
         c.showPage()
-        counter += len(orders)
+
     c.save()
 
     flagged = []
