@@ -114,64 +114,27 @@
     <p>Procesador de Hojas de Armado</p>
   </div>
 
+  <form method="POST" action="/api/login">
   <div class="form-group">
     <label>Usuario</label>
-    <input type="text" id="username" placeholder="Tu usuario" autocomplete="username">
+    <input type="text" name="username" placeholder="Tu usuario" autocomplete="username" required>
   </div>
   <div class="form-group">
     <label>Contraseña</label>
-    <input type="password" id="password" placeholder="Tu contraseña" autocomplete="current-password">
+    <input type="password" name="password" placeholder="Tu contraseña" autocomplete="current-password" required>
   </div>
 
-  <button class="btn-login" id="btnLogin" onclick="doLogin()">Ingresar</button>
-  <div class="error-msg" id="errorMsg"></div>
+  <button class="btn-login" type="submit">Ingresar</button>
+  </form>
+  <div class="error-msg" id="errorMsg" style="display:none"></div>
 </div>
 
 <script>
-  // Allow Enter key to submit
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Enter') doLogin();
-  });
-
-  async function doLogin() {
-    const username = document.getElementById('username').value.trim();
-    const password = document.getElementById('password').value;
-    const btn      = document.getElementById('btnLogin');
-    const err      = document.getElementById('errorMsg');
-
-    if (!username || !password) {
-      err.style.display = 'block';
-      err.textContent = 'Completá usuario y contraseña.';
-      return;
-    }
-
-    btn.disabled = true;
-    btn.textContent = 'Ingresando...';
-    err.style.display = 'none';
-
-    const fd = new FormData();
-    fd.append('username', username);
-    fd.append('password', password);
-
-    try {
-      const r = await fetch('/api/login', { method: 'POST', body: fd, credentials: 'same-origin' });
-      let data = {};
-      try { data = await r.json(); } catch(_) {}
-
-      if (data.ok) {
-        window.location.replace('/');
-      } else {
-        err.style.display = 'block';
-        err.textContent = data.error || `Error ${r.status}. Revisá usuario y contraseña.`;
-        btn.disabled = false;
-        btn.textContent = 'Ingresar';
-      }
-    } catch(e) {
-      err.style.display = 'block';
-      err.textContent = 'No se pudo conectar con el servidor. Intentá de nuevo.';
-      btn.disabled = false;
-      btn.textContent = 'Ingresar';
-    }
+  // Mostrar error si viene ?error=1 en la URL
+  if (window.location.search.includes('error=1')) {
+    const err = document.getElementById('errorMsg');
+    err.style.display = 'block';
+    err.textContent = 'Usuario o contraseña incorrectos.';
   }
 </script>
 </body>

@@ -518,13 +518,18 @@ def index(request: Request):
 @app.post("/api/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
     if not verify_login(username, password):
-        return JSONResponse({"ok": False, "error": "Usuario o contraseña incorrectos"}, status_code=401)
+        # Volver al login con error en query param
+        return RedirectResponse(url="/login?error=1", status_code=303)
     token = secrets.token_hex(32)
     SESSIONS[token] = username
     save_sessions()
-    response = JSONResponse({"ok": True, "username": username})
+    response = RedirectResponse(url="/", status_code=303)
     response.set_cookie("session_token", token, httponly=True, max_age=60*60*12, samesite="lax")
     return response
+
+@app.get("/login")
+def login_page(request: Request):
+    return FileResponse(str(BASE / "static" / "login.html"))
 
 @app.post("/api/logout")
 def logout(request: Request):
