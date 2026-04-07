@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 import pdfplumber
+from pypdf import PdfReader, PdfWriter
 from pdf2image import convert_from_path
 from PIL import Image, ImageDraw, ImageFont
 from reportlab.pdfgen import canvas
@@ -338,6 +339,73 @@ def annotate_label_page(img, order_num, font_size_num=30):
     draw.text((x, y), text, fill=(0, 0, 0, 255), font=font)
     return img
 
+
+def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36):
+    """
+    Genera un PDF de una página con el número superpuesto como texto vectorial
+    en la zona libre superior derecha de la etiqueta.
+    Zona libre aprox: x 170-283.5pt, y (page_height - 74) a (page_height - 10)pt
+    (reportlab usa origen abajo-izquierda, PDF usa origen arriba-izquierda)
+    """
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(page_width_pt, page_height_pt))
+
+    # Zona libre en coordenadas PDF (origen abajo-izquierda)
+    zone_x1 = 170
+    zone_x2 = page_width_pt - 4
+    zone_y1 = page_height_pt - 74   # parte inferior de la zona (top=74 en coords arriba)
+    zone_y2 = page_height_pt - 10   # parte superior (top=10 en coords arriba)
+    zone_w = zone_x2 - zone_x1
+    zone_h = zone_y2 - zone_y1
+
+    text = str(number)
+
+    # Auto-ajustar tamaño para que entre en la zona
+    fs = font_size_pt
+    while fs > 8:
+        c.setFont("Helvetica-Bold", fs)
+        tw = c.stringWidth(text, "Helvetica-Bold", fs)
+        th = fs * 1.1
+        if tw <= zone_w and th <= zone_h:
+            break
+        fs -= 2
+
+    tw = c.stringWidth(text, "Helvetica-Bold", fs)
+    th = fs * 1.1
+
+    # Centrar en la zona
+    x = zone_x1 + (zone_w - tw) / 2
+    y = zone_y1 + (zone_h - th) / 2
+
+    c.setFillColorRGB(0, 0, 0)
+    c.drawString(x, y, text)
+    c.save()
+    buf.seek(0)
+    return buf
+
+
+def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36):
+    """
+    Superpone el número como texto vectorial sobre la página de etiqueta indicada.
+    Devuelve bytes del PDF resultante.
+    """
+    reader = PdfReader(io.BytesIO(input_pdf_bytes))
+    writer = PdfWriter()
+
+    for i, page in enumerate(reader.pages):
+        if i == page_idx:
+            w = float(page.mediabox.width)
+            h = float(page.mediabox.height)
+            overlay_buf = make_number_overlay(number, w, h, font_size_pt=font_size_pt)
+            overlay_reader = PdfReader(overlay_buf)
+            page.merge_page(overlay_reader.pages[0])
+        writer.add_page(page)
+
+    out_buf = io.BytesIO()
+    writer.write(out_buf)
+    out_buf.seek(0)
+    return out_buf.read()
+
 # ── Main processor ────────────────────────────────────────
 def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_num=30, font_size_lbl=25):
     label_pages, order_page_idxs = split_pages(pdf_path)
@@ -358,15 +426,7 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
     total_orders = sum(len(o) for o in all_orders)
     total_pages  = len(order_page_idxs)
 
-    # Renderizar TODAS las páginas del PDF original
-    all_pages_img = convert_from_path(pdf_path, dpi=DPI)
-
-    out_name = f"armado_{datetime.now(tz).strftime('%Y%m%d_%H%M%S')}.pdf"
-    out_path = str(OUTPUTS / out_name)
-    c = canvas.Canvas(out_path)
-
-    # Construir mapa: índice de página → número de pedido (para etiquetas)
-    # Las etiquetas aparecen en el mismo orden que los pedidos en el armado
+    # Mapa etiqueta → número de pedido
     label_to_order = {}
     order_counter = start_number
     for orders in all_orders:
@@ -375,34 +435,63 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
                 label_to_order[label_pages[len(label_to_order)]] = order_counter
             order_counter += 1
 
+    # Leer el PDF original como bytes (para overlay vectorial en etiquetas)
+    with open(pdf_path, "rb") as f:
+        original_pdf_bytes = f.read()
+
+    # Renderizar solo las páginas de armado a imagen (necesitan anotaciones complejas)
+    armado_imgs = convert_from_path(pdf_path, dpi=DPI,
+                                    first_page=order_page_idxs[0] + 1,
+                                    last_page=order_page_idxs[-1] + 1)
+
+    out_name = f"armado_{datetime.now(tz).strftime('%Y%m%d_%H%M%S')}.pdf"
+    out_path = str(OUTPUTS / out_name)
+
+    # ── Paso 1: superponer números en etiquetas (vectorial, sin rasterizar) ──
+    pdf_bytes = original_pdf_bytes
+    for page_idx in label_pages:
+        order_num = label_to_order.get(page_idx, "?")
+        pdf_bytes = overlay_number_on_label(pdf_bytes, page_idx, order_num,
+                                            font_size_pt=int(font_size_num * 0.9))
+
+    # ── Paso 2: reemplazar páginas de armado con versión anotada (imagen) ──
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    writer = PdfWriter()
+
     armado_counter = start_number
     armado_page_num = 0
-    for page_idx, img in enumerate(all_pages_img):
-        iw_pt = img.width * 72 / DPI
-        ih_pt = img.height * 72 / DPI
-        c.setPageSize((iw_pt, ih_pt))
+    armado_img_idx = 0
 
+    for page_idx in range(len(reader.pages)):
         if page_idx in order_page_idxs:
-            # Página de armado — anotar pedidos y encabezado
             orders = all_orders[order_page_idxs.index(page_idx)]
+            img = armado_imgs[armado_img_idx]
             ann = annotate_page(img.copy(), orders, order_number_start=armado_counter,
                                 font_size_num=font_size_num, font_size_lbl=font_size_lbl)
             ann = add_header_overlay(ann, now_str, armado_page_num + 1, total_pages,
                                      total_orders, envio_type, offset_y=header_offset)
             armado_counter += len(orders)
             armado_page_num += 1
-        elif page_idx in label_pages:
-            # Página de etiqueta — agregar número de pedido
-            order_num = label_to_order.get(page_idx, "?")
-            ann = annotate_label_page(img.copy(), order_num, font_size_num=font_size_num)
+            armado_img_idx += 1
+
+            # Convertir imagen anotada a página PDF
+            iw_pt = img.width * 72 / DPI
+            ih_pt = img.height * 72 / DPI
+            img_buf = io.BytesIO()
+            ann.save(img_buf, format='PNG')
+            img_buf.seek(0)
+            page_buf = io.BytesIO()
+            pc = canvas.Canvas(page_buf, pagesize=(iw_pt, ih_pt))
+            pc.drawImage(ImageReader(img_buf), 0, 0, width=iw_pt, height=ih_pt)
+            pc.save()
+            page_buf.seek(0)
+            armado_page = PdfReader(page_buf).pages[0]
+            writer.add_page(armado_page)
         else:
-            ann = img.copy()
+            writer.add_page(reader.pages[page_idx])
 
-        buf = io.BytesIO(); ann.save(buf, format='PNG'); buf.seek(0)
-        c.drawImage(ImageReader(buf), 0, 0, width=iw_pt, height=ih_pt)
-        c.showPage()
-
-    c.save()
+    with open(out_path, "wb") as f:
+        writer.write(f)
 
     flagged = []
     num = start_number
