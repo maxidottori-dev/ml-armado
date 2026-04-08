@@ -70,7 +70,10 @@ def load_state():
     if STATE_FILE.exists():
         s = json.loads(STATE_FILE.read_text())
         if s.get("date") != today:
+            # Nuevo día: resetear contadores pero preservar keywords
+            keywords = s.get("keywords", "agitador,agitadores,collarin,collarín,collarines")
             s = default_state(today)
+            s["keywords"] = keywords
     else:
         s = default_state(today)
     return s
@@ -80,7 +83,8 @@ def default_state(today):
         "date": today,
         "flex_count": 0,    "flex_next": 1,
         "colecta_count": 0, "colecta_next": 1,
-        "history": []
+        "history": [],
+        "keywords": "agitador,agitadores,collarin,collarín,collarines"
     }
 
 def save_state(s): STATE_FILE.write_text(json.dumps(s, ensure_ascii=False, indent=2))
@@ -600,6 +604,13 @@ def download(filename: str, user: str = Depends(require_auth)):
     if not path.exists(): raise HTTPException(status_code=404)
     return FileResponse(str(path), media_type="application/pdf",
                         headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+@app.put("/api/keywords")
+def save_keywords(body: dict, user: str = Depends(require_auth)):
+    state = load_state()
+    state["keywords"] = body.get("keywords", state.get("keywords", ""))
+    save_state(state)
+    return {"ok": True, "keywords": state["keywords"]}
 
 @app.post("/api/reset")
 def reset_state(user: str = Depends(require_auth)):

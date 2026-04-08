@@ -332,6 +332,12 @@ function applyState(s) {
   document.getElementById('startFlex').value        = s.flex_next     || 1;
   document.getElementById('startColecta').value     = s.colecta_next  || 1;
 
+  // Cargar keywords guardadas (iguales para ambos módulos)
+  if (s.keywords) {
+    document.getElementById('keywordsFlex').value    = s.keywords;
+    document.getElementById('keywordsColecta').value = s.keywords;
+  }
+
   const hl = document.getElementById('historyList');
   if (!s.history || s.history.length === 0) {
     hl.innerHTML = '<div style="font-size:13px;color:var(--text-muted)">Sin procesar aún hoy.</div>';
@@ -494,6 +500,24 @@ async function init() {
     document.getElementById('headerUser').textContent = d.username;
   } catch(e) { window.location.href = '/'; }
   loadState();
+
+  // Guardar keywords cuando el usuario termina de editar
+  function saveKeywords(value) {
+    fetch('/api/keywords', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keywords: value })
+    });
+    // Sincronizar ambos campos
+    document.getElementById('keywordsFlex').value    = value;
+    document.getElementById('keywordsColecta').value = value;
+  }
+  document.getElementById('keywordsFlex').addEventListener('blur', function() {
+    saveKeywords(this.value);
+  });
+  document.getElementById('keywordsColecta').addEventListener('blur', function() {
+    saveKeywords(this.value);
+  });
 }
 init();
 </script>
