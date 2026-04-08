@@ -94,12 +94,18 @@ def normalize(text):
     return text.lower().replace('í','i').replace('ó','o').replace('á','a').replace('é','e').replace('ú','u')
 
 def keywords_to_label(labels):
+    if not labels:
+        return ""
     has_agit = any('agitador' in normalize(k) for k in labels)
     has_coll = any('collarin' in normalize(k) for k in labels)
+    # Palabras especiales con cartel propio
     if has_agit and has_coll: return "! AGITADORES + COLLARÍN !"
     if has_agit:              return "! AGITADORES !"
     if has_coll:              return "! COLLARÍN !"
-    return ""
+    # Cualquier otra keyword: mostrar la palabra encontrada en el cartel
+    words = sorted(set(normalize(k) for k in labels))
+    label = " + ".join(f"! {w.upper()} !" for w in words)
+    return label
 
 def load_font(size):
     candidates = [
