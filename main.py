@@ -661,13 +661,13 @@ async def update_keywords(request: Request):
 
 
 @app.post("/api/reset")
-def reset_state(user: str = Depends(require_auth)):
+def reset_state():
     today = datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d")
     save_state(default_state(today))
     return {"ok": True}
 
 @app.put("/api/next-number")
-def set_next_number(body: dict, user: str = Depends(require_auth)):
+def set_next_number(body: dict):
     state = load_state()
     tipo = body.get("tipo", "flex")
     num  = int(body.get("number", 1))
