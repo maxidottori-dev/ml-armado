@@ -1,4 +1,6 @@
 import os, re, json, io, shutil, hashlib, secrets
+import firebase_admin
+from firebase_admin import credentials, firestore
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -13,6 +15,39 @@ from pdf2image import convert_from_path
 from PIL import Image, ImageDraw, ImageFont
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
+
+# ── Firebase ──────────────────────────────────────────────
+_fb_app = None
+def get_firestore():
+    global _fb_app
+    if _fb_app is None:
+        pk = os.environ.get("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n")
+        cred = credentials.Certificate({
+            "type": "service_account",
+            "project_id": os.environ.get("FIREBASE_PROJECT_ID", ""),
+            "private_key": pk,
+            "client_email": os.environ.get("FIREBASE_CLIENT_EMAIL", ""),
+            "token_uri": "https://oauth2.googleapis.com/token",
+        })
+        _fb_app = firebase_admin.initialize_app(cred)
+    return firestore.client()
+
+def get_keywords_from_fb():
+    try:
+        db = get_firestore()
+        doc = db.collection("config").document("mlArmado").get()
+        if doc.exists:
+            return doc.to_dict().get("keywords", "")
+        return ""
+    except Exception:
+        return ""
+
+def save_keywords_to_fb(keywords: str):
+    try:
+        db = get_firestore()
+        db.collection("config").document("mlArmado").set({"keywords": keywords}, merge=True)
+    except Exception:
+        pass
 
 DPI   = 150
 SCALE = DPI / 72.0
@@ -557,7 +592,12 @@ def me(request: Request):
 
 @app.get("/api/state")
 def get_state():
-    return load_state()
+    s = load_state()
+    # Traer keywords de Firebase (tiene prioridad sobre state.json)
+    fb_kw = get_keywords_from_fb()
+    if fb_kw:
+        s["keywords"] = fb_kw
+    return s
 
 @app.post("/api/process")
 async def process(
@@ -609,11 +649,16 @@ def download(filename: str):
                         headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 @app.put("/api/keywords")
-def save_keywords(body: dict, user: str = Depends(require_auth)):
-    state = load_state()
-    state["keywords"] = body.get("keywords", state.get("keywords", ""))
-    save_state(state)
-    return {"ok": True, "keywords": state["keywords"]}
+async def update_keywords(request: Request):
+    body = await request.json()
+    kw = body.get("keywords", "")
+    # Guardar en Firebase (persistente) y en state.json (local)
+    save_keywords_to_fb(kw)
+    s = load_state()
+    s["keywords"] = kw
+    save_state(s)
+    return {"ok": True}
+
 
 @app.post("/api/reset")
 def reset_state(user: str = Depends(require_auth)):

@@ -6,3 +6,4 @@ pdf2image
 Pillow
 reportlab
 pypdf
+firebase-admin
