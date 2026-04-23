@@ -521,8 +521,6 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
 # ── API Routes ────────────────────────────────────────────
 @app.get("/")
 def index(request: Request):
-    if not get_current_user(request):
-        return FileResponse(str(BASE / "static" / "login.html"))
     return FileResponse(str(BASE / "static" / "index.html"))
 
 @app.post("/api/login")
@@ -558,7 +556,7 @@ def me(request: Request):
     return {"username": user}
 
 @app.get("/api/state")
-def get_state(user: str = Depends(require_auth)):
+def get_state():
     return load_state()
 
 @app.post("/api/process")
@@ -570,7 +568,6 @@ async def process(
     header_offset: int = Form(default=20),
     font_size_num: int = Form(default=30),
     font_size_lbl: int = Form(default=25),
-    user: str = Depends(require_auth),
 ):
     pdf_path = str(UPLOADS / file.filename)
     with open(pdf_path, "wb") as f:
@@ -605,7 +602,7 @@ async def process(
     return JSONResponse({**info, "state": state})
 
 @app.get("/api/download/{filename}")
-def download(filename: str, user: str = Depends(require_auth)):
+def download(filename: str):
     path = OUTPUTS / filename
     if not path.exists(): raise HTTPException(status_code=404)
     return FileResponse(str(path), media_type="application/pdf",
