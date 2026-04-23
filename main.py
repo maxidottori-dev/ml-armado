@@ -100,19 +100,6 @@ def require_auth(request: Request):
     return u
 
 # ── State ─────────────────────────────────────────────────
-def load_state():
-    today = datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d")
-    if STATE_FILE.exists():
-        s = json.loads(STATE_FILE.read_text())
-        if s.get("date") != today:
-            # Nuevo día: resetear contadores pero preservar keywords
-            keywords = s.get("keywords", "agitador,agitadores,collarin,collarín,collarines")
-            s = default_state(today)
-            s["keywords"] = keywords
-    else:
-        s = default_state(today)
-    return s
-
 def default_state(today):
     return {
         "date": today,
@@ -122,7 +109,37 @@ def default_state(today):
         "keywords": "agitador,agitadores,collarin,collarín,collarines"
     }
 
-def save_state(s): STATE_FILE.write_text(json.dumps(s, ensure_ascii=False, indent=2))
+def load_state():
+    """Lee estado desde Firebase. Si no existe o es de otro día, retorna default."""
+    today = datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d")
+    try:
+        db = get_firestore()
+        doc = db.collection("config").document("mlArmadoState").get()
+        if doc.exists:
+            s = doc.to_dict()
+            if s.get("date") != today:
+                # Nuevo día: preservar keywords pero resetear contadores
+                keywords = s.get("keywords", "agitador,agitadores,collarin,collarín,collarines")
+                s = default_state(today)
+                s["keywords"] = keywords
+                save_state(s)
+            return s
+    except Exception as e:
+        print(f"Firebase load_state error: {e}")
+    return default_state(today)
+
+def save_state(s):
+    """Guarda estado en Firebase (persistente) y opcionalmente en archivo local."""
+    try:
+        db = get_firestore()
+        db.collection("config").document("mlArmadoState").set(s)
+    except Exception as e:
+        print(f"Firebase save_state error: {e}")
+    # Fallback local también
+    try:
+        STATE_FILE.write_text(json.dumps(s, ensure_ascii=False, indent=2))
+    except Exception:
+        pass
 
 # ── Helpers ───────────────────────────────────────────────
 def normalize(text):
