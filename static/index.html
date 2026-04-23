@@ -145,8 +145,6 @@
   </div>
   <div class="header-right">
     <div class="header-date" id="headerDate"></div>
-    <div class="header-user" id="headerUser"></div>
-    <button class="btn-logout" onclick="doLogout()">SALIR</button>
   </div>
 </header>
 
@@ -475,8 +473,7 @@ async function confirmReset() {
 
 // ── Auth ─────────────────────────────────────────────────
 async function doLogout() {
-  await fetch('/api/logout', {method:'POST'});
-  window.location.href = '/';
+
 }
 
 // ── Clock ────────────────────────────────────────────────
@@ -493,12 +490,6 @@ function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
 // ── Init ─────────────────────────────────────────────────
 async function init() {
-  try {
-    const r = await fetch('/api/me');
-    if (!r.ok) { window.location.href = '/'; return; }
-    const d = await r.json();
-    document.getElementById('headerUser').textContent = d.username;
-  } catch(e) { window.location.href = '/'; }
   loadState();
 
   // Guardar keywords cuando el usuario termina de editar
