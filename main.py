@@ -223,7 +223,30 @@ def extract_ids_from_labels(pdf_path, label_pages):
 
     return envio_ids, envio_type
 
-GAP_THRESHOLD = 8  # pt mínimo de separación vertical para nuevo pedido
+def extract_envio_id_per_label(pdf_path, label_pages):
+    """
+    Devuelve una lista con el envio ID (str) de cada pagina de etiqueta, en orden.
+    Si no se detecta ID en una pagina, devuelve "" para ese indice.
+    Solo aplica a Flex (IDs numericos que empiezan con 46).
+    """
+    result = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for i in label_pages:
+            found = ""
+            words = pdf.pages[i].extract_words()
+            for w in words:
+                clean = re.sub(r'\s+', '', w['text'])
+                nums = re.findall(r'\d{9,12}', clean)
+                for n in nums:
+                    if n.startswith('46'):
+                        found = n
+                        break
+                if found:
+                    break
+            result.append(found)
+    return result
+
+GAP_THRESHOLD = 8  # pt minimo de separacion vertical para nuevo pedido
 
 def is_order_header(word_text, next_left_word_text):
     """
@@ -402,7 +425,7 @@ def annotate_label_page(img, order_num, font_size_num=30):
     return img
 
 
-def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36):
+def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36, logistica=""):
     """
     Genera un PDF de una página con el número superpuesto como texto vectorial
     en la zona libre superior derecha de la etiqueta.
@@ -441,12 +464,23 @@ def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36):
 
     c.setFillColorRGB(0, 0, 0)
     c.drawString(x, y, text)
+
+    # Logistica debajo del numero (opcional)
+    if logistica:
+        fs_log = max(8, int(fs * 0.38))
+        c.setFont("Helvetica-Bold", fs_log)
+        tw_log = c.stringWidth(logistica, "Helvetica-Bold", fs_log)
+        x_log = zone_x1 + (zone_w - tw_log) / 2
+        y_log = y - fs_log * 1.3
+        c.setFillColorRGB(0, 0, 0)
+        c.drawString(x_log, y_log, logistica)
+
     c.save()
     buf.seek(0)
     return buf
 
 
-def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36):
+def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36, logistica=""):
     """
     Superpone el número como texto vectorial sobre la página de etiqueta indicada.
     Devuelve bytes del PDF resultante.
@@ -458,7 +492,7 @@ def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36):
         if i == page_idx:
             w = float(page.mediabox.width)
             h = float(page.mediabox.height)
-            overlay_buf = make_number_overlay(number, w, h, font_size_pt=font_size_pt)
+            overlay_buf = make_number_overlay(number, w, h, font_size_pt=font_size_pt, logistica=logistica)
             overlay_reader = PdfReader(overlay_buf)
             page.merge_page(overlay_reader.pages[0])
         writer.add_page(page)
@@ -469,7 +503,7 @@ def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36):
     return out_buf.read()
 
 # ── Main processor ────────────────────────────────────────
-def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_num=30, font_size_lbl=25):
+def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_num=30, font_size_lbl=25, logistica_map=None):
     label_pages, order_page_idxs = split_pages(pdf_path)
     if not order_page_idxs:
         raise ValueError("No se encontraron páginas de armado en el PDF.")
@@ -487,6 +521,13 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
 
     total_orders = sum(len(o) for o in all_orders)
     total_pages  = len(order_page_idxs)
+
+    if logistica_map is None:
+        logistica_map = {}
+
+    # Mapa etiqueta → envio ID (para lookup de logistica)
+    ids_per_label = extract_envio_id_per_label(pdf_path, label_pages)
+    label_page_to_envio_id = {label_pages[i]: ids_per_label[i] for i in range(len(label_pages))}
 
     # Mapa etiqueta → número de pedido
     label_to_order = {}
@@ -513,8 +554,11 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
     pdf_bytes = original_pdf_bytes
     for page_idx in label_pages:
         order_num = label_to_order.get(page_idx, "?")
+        envio_id = label_page_to_envio_id.get(page_idx, "")
+        logistica = logistica_map.get(envio_id, "")
         pdf_bytes = overlay_number_on_label(pdf_bytes, page_idx, order_num,
-                                            font_size_pt=int(font_size_num * 0.9))
+                                            font_size_pt=int(font_size_num * 0.9),
+                                            logistica=logistica)
 
     # ── Paso 2: reemplazar páginas de armado con versión anotada (imagen) ──
     reader = PdfReader(io.BytesIO(pdf_bytes))
@@ -625,14 +669,19 @@ async def process(
     header_offset: int = Form(default=20),
     font_size_num: int = Form(default=30),
     font_size_lbl: int = Form(default=25),
+    logistica_map: str = Form(default="{}"),
 ):
     pdf_path = str(UPLOADS / file.filename)
     with open(pdf_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
     kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
     try:
+        lmap = json.loads(logistica_map) if logistica_map else {}
+    except Exception:
+        lmap = {}
+    try:
         out_path, info = process_pdf(pdf_path, kw_list, start_number, header_offset,
-                                     font_size_num, font_size_lbl)
+                                     font_size_num, font_size_lbl, logistica_map=lmap)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
