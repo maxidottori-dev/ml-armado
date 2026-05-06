@@ -218,7 +218,7 @@ def extract_ids_from_labels(pdf_path, label_pages):
                 clean = re.sub(r'\s+', '', w['text'])
                 nums = re.findall(r'\d{9,12}', clean)
                 for n in nums:
-                    if n.startswith('46'):  # solo IDs Flex reales
+                    if len(n) == 11 and n.startswith('4'):  # IDs Flex: 11 dígitos que empiezan con 4x
                         envio_ids.add(n)
 
     return envio_ids, envio_type
@@ -238,7 +238,7 @@ def extract_envio_id_per_label(pdf_path, label_pages):
                 clean = re.sub(r'\s+', '', w['text'])
                 nums = re.findall(r'\d{9,12}', clean)
                 for n in nums:
-                    if n.startswith('46'):
+                    if len(n) == 11 and n.startswith('4'):  # IDs Flex: 11 dígitos que empiezan con 4x
                         found = n
                         break
                 if found:
@@ -298,7 +298,7 @@ def get_orders(page, known_ids, keywords, envio_type="Flex"):
             text = w['text']
             nums = re.findall(r'\d{9,12}', text)
             for num in nums:
-                if num in known_ids and num.startswith('46') and w['x0'] < 200:
+                if num in known_ids and len(num) == 11 and num.startswith('4') and w['x0'] < 200:
                     if not any(o['id'] == num for o in order_ids):
                         order_ids.append({'id': num, 'top': w['top'],
                                           'id_x1': w.get('x1', 90)})
@@ -352,15 +352,30 @@ def annotate_page(img, orders, order_number_start=1, font_size_num=30, font_size
     PROD_COL_X = 260  # products column always starts at ~260pt
     font_num = load_font(font_size_num)
     font_lbl = load_font(font_size_lbl)
+    font_log = load_font(max(8, int(font_size_num * 0.38)))  # logistica: 38% del tamaño del número
 
     for idx, order in enumerate(orders):
-        num    = order_number_start + idx
+        num      = order_number_start + idx
+        logistica = order.get('logistica', '')
         y_top  = int(order['box_top'] * SCALE)
         y_bot  = int(order['box_bot'] * SCALE)
         num_cy = y_top + (y_bot - y_top) // 2
         # Center number in the gap between ID col end and products col start
         id_x1  = order.get('id_x1', 88)
         num_cx = int(((id_x1 + PROD_COL_X) / 2) * SCALE)
+
+        def draw_num_and_log(color=(0,0,0,255)):
+            nb = font_num.getbbox(str(num)); nw, nh = nb[2]-nb[0], nb[3]-nb[1]
+            if logistica:
+                lb = font_log.getbbox(logistica); lw, lh = lb[2]-lb[0], lb[3]-lb[1]
+                gap = int(2 * SCALE)
+                total_h = nh + gap + lh
+                num_y = num_cy - total_h // 2
+                log_y = num_y + nh + gap
+                draw.text((num_cx - nw // 2, num_y), str(num), fill=color, font=font_num)
+                draw.text((num_cx - lw // 2, log_y), logistica, fill=color, font=font_log)
+            else:
+                draw.text((num_cx - nw // 2, num_cy - nh // 2), str(num), fill=color, font=font_num)
 
         if order['labels']:
             draw.rectangle([x_left, y_top, x_right, y_bot], fill=(200, 200, 200, 80))
@@ -374,12 +389,10 @@ def annotate_page(img, orders, order_number_start=1, font_size_num=30, font_size
                 if by1 < 0: by1 = y_top; by2 = y_top + th + pad*2
                 draw.rectangle([bx1, by1, bx2, by2], fill=(0, 0, 0, 255))
                 draw.text((bx1+pad, by1+pad), f"  {badge}  ", fill=(255,255,255), font=font_lbl)
-            nb = font_num.getbbox(str(num)); nw,nh = nb[2]-nb[0], nb[3]-nb[1]
-            draw.text((num_cx-nw//2, num_cy-nh//2), str(num), fill=(0,0,0,255), font=font_num)
+            draw_num_and_log()
         else:
             draw.line([(x_left, y_bot), (x_right, y_bot)], fill=(130,130,130,220), width=2)
-            nb = font_num.getbbox(str(num)); nw,nh = nb[2]-nb[0], nb[3]-nb[1]
-            draw.text((num_cx-nw//2, num_cy-nh//2), str(num), fill=(0,0,0,255), font=font_num)
+            draw_num_and_log()
     return img
 
 
@@ -524,6 +537,11 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
 
     if logistica_map is None:
         logistica_map = {}
+
+    # Agregar logistica a cada orden (para mostrarla en el listado de armado)
+    for orders in all_orders:
+        for order in orders:
+            order['logistica'] = logistica_map.get(order['id'], '')
 
     # Mapa etiqueta → envio ID (para lookup de logistica)
     ids_per_label = extract_envio_id_per_label(pdf_path, label_pages)
