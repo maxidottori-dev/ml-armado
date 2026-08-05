@@ -229,7 +229,7 @@ def extract_ids_from_labels(pdf_path, label_pages):
             text = pdf.pages[i].extract_text() or ""
             words = pdf.pages[i].extract_words()
 
-            if any(k in text for k in ["Envío Flex", "Envio Flex", "FLEX"]):
+            if "Envío Flex" in text or "Envio Flex" in text or re.search(r'\bFLEX\b', text):
                 envio_type = "Flex"
 
             for w in words:
