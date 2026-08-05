@@ -493,6 +493,15 @@ def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36, 
     x = zone_x1 + (zone_w - tw) / 2
     y = zone_y1 + (zone_h - th) / 2
 
+    # Fondo blanco para que el número sea visible sobre cualquier contenido
+    pad = 4
+    c.setFillColorRGB(1, 1, 1)
+    c.rect(x - pad, y - pad * 0.5, tw + pad * 2, th + pad, fill=1, stroke=0)
+    # Borde negro fino
+    c.setStrokeColorRGB(0, 0, 0)
+    c.setLineWidth(0.5)
+    c.rect(x - pad, y - pad * 0.5, tw + pad * 2, th + pad, fill=0, stroke=1)
+
     c.setFillColorRGB(0, 0, 0)
     c.drawString(x, y, text)
 
