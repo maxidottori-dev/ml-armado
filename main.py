@@ -906,3 +906,4 @@ def set_next_number(body: dict):
         state["colecta_next"] = num
     save_state(state)
     return state
+
