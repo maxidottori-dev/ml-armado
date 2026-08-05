@@ -145,6 +145,24 @@ def save_state(s):
 def normalize(text):
     return text.lower().replace('í','i').replace('ó','o').replace('á','a').replace('é','e').replace('ú','u')
 
+def extract_label_info_from_text(text):
+    """Extract order ID, barcode, and recipient from a colecta label page text."""
+    m = re.search(r'(?:Pack ID:|Venta:)\s*(\d+)', text)
+    order_id = m.group(1) if m else ""
+    m = re.search(r'\b(\d{11})\b', text)
+    barcode = m.group(1) if m else ""
+    lines = text.split('\n')
+    recipient = ""
+    for i, line in enumerate(lines):
+        if 'Domicilio:' in line:
+            for j in range(i - 1, -1, -1):
+                candidate = re.sub(r'\s*\([^)]+\)', '', lines[j]).strip()
+                if candidate and len(candidate) > 4 and not re.match(r'^[\d\s:>]+$', candidate):
+                    recipient = candidate
+                    break
+            break
+    return order_id, barcode, recipient
+
 def keywords_to_label(labels):
     if not labels:
         return ""
@@ -515,11 +533,138 @@ def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36, 
     out_buf.seek(0)
     return out_buf.read()
 
+# ── Listado generator (labels-only format) ────────────────
+def generate_listado_pdf(items, date_str, start_number):
+    """Generate a PDF listado from a list of label dicts. Returns bytes."""
+    A4_W, A4_H = 595, 842
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(A4_W, A4_H))
+
+    total = len(items)
+    end_num = start_number + total - 1
+    y = A4_H - 40
+
+    # Title
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(30, y, f"Listado de Colecta — {date_str}")
+    y -= 18
+    c.setFont("Helvetica", 10)
+    c.drawString(30, y, f"Total: {total} envíos  |  Números {start_number}–{end_num}")
+    y -= 22
+
+    # Column headers
+    c.setFillColorRGB(0.3, 0.3, 0.3)
+    c.rect(30, y - 4, A4_W - 60, 15, fill=1, stroke=0)
+    c.setFillColorRGB(1, 1, 1)
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(33, y, "#")
+    c.drawString(55, y, "Pack ID / Venta")
+    c.drawString(220, y, "Código de barras")
+    c.drawString(335, y, "Destinatario")
+    c.setFillColorRGB(0, 0, 0)
+    y -= 14
+
+    c.setFont("Helvetica", 8)
+    for i, item in enumerate(items):
+        if y < 40:
+            c.showPage()
+            y = A4_H - 40
+            c.setFont("Helvetica", 8)
+        if i % 2 == 0:
+            c.setFillColorRGB(0.94, 0.94, 0.94)
+            c.rect(30, y - 3, A4_W - 60, 11, fill=1, stroke=0)
+            c.setFillColorRGB(0, 0, 0)
+        c.drawString(33, y, str(item['num']))
+        c.drawString(55, y, str(item['order_id'])[:25])
+        c.drawString(220, y, str(item['barcode']))
+        c.drawString(335, y, str(item['recipient'])[:38])
+        y -= 11
+
+    c.save()
+    buf.seek(0)
+    return buf.read()
+
+
+def process_labels_only_pdf(pdf_path, keywords, start_number=1, font_size_num=30, font_size_lbl=25, logistica_map=None):
+    """
+    Handles colecta PDFs with NO armado pages (labels-only format).
+    Numbers each non-blank label page sequentially and appends a generated listado.
+    """
+    if logistica_map is None:
+        logistica_map = {}
+
+    tz = timezone(timedelta(hours=-3))
+    now_str = datetime.now(tz).strftime("%d/%m/%Y  %H:%M")
+
+    # Collect non-blank label pages with their info
+    page_infos = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for i, page in enumerate(pdf.pages):
+            text = page.extract_text() or ""
+            if not text.strip():
+                continue
+            order_id, barcode, recipient = extract_label_info_from_text(text)
+            if order_id:
+                page_infos.append({
+                    'page_idx': i,
+                    'order_id': order_id,
+                    'barcode': barcode,
+                    'recipient': recipient,
+                })
+
+    if not page_infos:
+        raise ValueError("No se encontraron etiquetas válidas en el PDF.")
+
+    total_orders = len(page_infos)
+
+    # Overlay sequential numbers on each label page (vectorial)
+    with open(pdf_path, "rb") as f:
+        pdf_bytes = f.read()
+
+    items = []
+    for idx, info in enumerate(page_infos):
+        num = start_number + idx
+        info['num'] = num
+        items.append(info)
+        logistica = logistica_map.get(info['order_id'], '')
+        pdf_bytes = overlay_number_on_label(
+            pdf_bytes, info['page_idx'], num,
+            font_size_pt=int(font_size_num * 0.9),
+            logistica=logistica
+        )
+
+    # Generate listado page and append
+    listado_bytes = generate_listado_pdf(items, now_str, start_number)
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    for page in PdfReader(io.BytesIO(listado_bytes)).pages:
+        writer.add_page(page)
+
+    out_name = f"armado_{datetime.now(tz).strftime('%Y%m%d_%H%M%S')}.pdf"
+    out_path = str(OUTPUTS / out_name)
+    with open(out_path, "wb") as f:
+        writer.write(f)
+
+    return out_path, {
+        "envio_type": "Colecta",
+        "total_orders": total_orders,
+        "total_pages": 1,
+        "start_number": start_number,
+        "end_number": start_number + total_orders - 1,
+        "flagged": [],
+        "filename": out_name,
+    }
+
+
 # ── Main processor ────────────────────────────────────────
 def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_num=30, font_size_lbl=25, logistica_map=None):
     label_pages, order_page_idxs = split_pages(pdf_path)
     if not order_page_idxs:
-        raise ValueError("No se encontraron páginas de armado en el PDF.")
+        # Labels-only colecta format (no armado page) — handle gracefully
+        return process_labels_only_pdf(pdf_path, keywords, start_number, font_size_num, font_size_lbl, logistica_map)
 
     known_ids, envio_type = extract_ids_from_labels(pdf_path, label_pages)
     # Para Colecta los UUIDs están en la página de armado, no en etiquetas → ok si known_ids está vacío
