@@ -191,17 +191,44 @@ def load_font(size):
         except: continue
     return ImageFont.load_default()
 
-# ── UUID detection ────────────────────────────────────────
-def is_uuid(text):
-    """Detecta UUIDs tolerando ligadura 'fi' del extractor de PDF."""
-    if text.startswith('SKU:') or text.startswith('MEL'):
+# ── Order ID detection ────────────────────────────────────
+# BACKUP: funciones anteriores (UUID-based, formato viejo ML)
+# def is_uuid_old(text):
+#     """Detecta UUIDs tolerando ligadura 'fi' del extractor de PDF."""
+#     if text.startswith('SKU:') or text.startswith('MEL'): return False
+#     if text.count('-') != 4: return False
+#     if len(text) < 30 or len(text) > 50: return False
+#     allowed = set('0123456789abcdefABCDEFfi-')
+#     return all(c in allowed for c in text)
+#
+# def is_order_header_old(word_text, next_left_word_text):
+#     if is_uuid_old(word_text): return True
+#     if next_left_word_text and next_left_word_text.startswith(('Pack', 'Venta:')):
+#         t = word_text
+#         if any(t.startswith(x) for x in ('SKU:', 'Color:', 'Cantidad:', 'ID:', 'Nombre')):
+#             return False
+#         if len(t) < 5: return False
+#         return True
+#     return False
+# FIN BACKUP
+
+def is_order_header(word_text, next_left_word_text):
+    """
+    Regla universal (Flex y Colecta, formato nuevo y viejo):
+    Un word de la columna izquierda es encabezado de pedido si
+    la siguiente palabra de esa columna empieza con 'Pack'
+    (línea 'Pack ID: XXXXXXXXX' inmediata al ID).
+    No se valida el formato del ID — el Pack ID es la confirmación.
+    """
+    if not next_left_word_text or not next_left_word_text.startswith('Pack'):
         return False
-    if text.count('-') != 4:
+    # Excluir explícitamente tokens que no son IDs de pedido
+    t = word_text
+    if any(t.startswith(x) for x in ('SKU:', 'Color:', 'Cantidad:', 'ID:', 'Nombre:', 'Pack', 'Venta:')):
         return False
-    if len(text) < 30 or len(text) > 50:
+    if len(t) < 5:
         return False
-    allowed = set('0123456789abcdefABCDEFfi-')
-    return all(c in allowed for c in text)
+    return True
 
 # ── PDF Analysis ──────────────────────────────────────────
 def split_pages(pdf_path):
@@ -217,9 +244,13 @@ def split_pages(pdf_path):
 
 def extract_ids_from_labels(pdf_path, label_pages):
     """
-    Detecta tipo de envío y extrae IDs de etiquetas.
-    Colecta: UUIDs están solo en páginas de armado, no en etiquetas.
-    Flex: los IDs numéricos (466xxxxxxx) aparecen en etiquetas.
+    Detecta tipo de envío (Flex o Colecta) y extrae IDs de etiquetas.
+
+    Lógica:
+    - Si cualquier etiqueta contiene 'FLEX' → Flex, sino → Colecta.
+    - Flex: extrae números de envío (11 dígitos que empiezan con 4).
+    - Colecta: los IDs están en las páginas de armado, no en etiquetas
+      → devuelve set vacío (es correcto, no es un error).
     """
     envio_ids  = set()
     envio_type = "Colecta"
@@ -227,36 +258,65 @@ def extract_ids_from_labels(pdf_path, label_pages):
     with pdfplumber.open(pdf_path) as pdf:
         for i in label_pages:
             text = pdf.pages[i].extract_text() or ""
-            words = pdf.pages[i].extract_words()
 
-            if "Envío Flex" in text or "Envio Flex" in text or re.search(r'\bFLEX\b', text):
+            # Detección de tipo: basta con que UNA etiqueta diga FLEX
+            if re.search(r'\bFLEX\b', text):
                 envio_type = "Flex"
 
-            for w in words:
-                clean = re.sub(r'\s+', '', w['text'])
-                nums = re.findall(r'\d{9,12}', clean)
-                for n in nums:
-                    if len(n) == 11 and n.startswith('4'):  # IDs Flex: 11 dígitos que empiezan con 4x
-                        envio_ids.add(n)
+            # Para Flex: extraer número de envío (11 dígitos, empieza con 4)
+            # Para Colecta: no necesitamos IDs de etiqueta, usamos Pack ID del armado
+            if envio_type == "Flex":
+                for w in pdf.pages[i].extract_words():
+                    clean = re.sub(r'\s+', '', w['text'])
+                    for n in re.findall(r'\d{9,12}', clean):
+                        if len(n) == 11 and n.startswith('4'):
+                            envio_ids.add(n)
 
     return envio_ids, envio_type
 
-def extract_envio_id_per_label(pdf_path, label_pages):
+def extract_pack_id_per_label(pdf_path, label_pages):
     """
-    Devuelve una lista con el envio ID (str) de cada pagina de etiqueta, en orden.
-    Si no se detecta ID en una pagina, devuelve "" para ese indice.
-    Solo aplica a Flex (IDs numericos que empiezan con 46).
+    Devuelve lista con el Pack ID (str) de cada página de etiqueta, en orden.
+    El Pack ID aparece en ambos tipos (Flex y Colecta) y sirve para cruzar
+    etiqueta ↔ pedido en el listado de armado.
+    Si no se detecta en una página, devuelve "" para ese índice.
     """
     result = []
+    pack_re = re.compile(r'Pack\s*ID\s*:?\s*(\d{10,20})')
+    with pdfplumber.open(pdf_path) as pdf:
+        for i in label_pages:
+            text = pdf.pages[i].extract_text() or ""
+            m = pack_re.search(text)
+            result.append(m.group(1) if m else "")
+    return result
+
+def extract_envio_id_per_label(pdf_path, label_pages):
+    """
+    Devuelve lista con el envío ID (str) de cada página de etiqueta, en orden.
+    - Flex: número de envío 11 dígitos (empieza con 4) — es la clave del logistica_map.
+    - Colecta: sin logística individual → siempre devuelve "" (no aplica).
+    """
+    # Primero detectar el tipo para no procesar Colecta innecesariamente
+    envio_type = "Colecta"
+    with pdfplumber.open(pdf_path) as pdf:
+        for i in label_pages:
+            text = pdf.pages[i].extract_text() or ""
+            if re.search(r'\bFLEX\b', text):
+                envio_type = "Flex"
+                break
+
+    result = []
+    if envio_type != "Flex":
+        # Colecta no tiene logística individual → lista de cadenas vacías
+        return [""] * len(label_pages)
+
     with pdfplumber.open(pdf_path) as pdf:
         for i in label_pages:
             found = ""
-            words = pdf.pages[i].extract_words()
-            for w in words:
+            for w in pdf.pages[i].extract_words():
                 clean = re.sub(r'\s+', '', w['text'])
-                nums = re.findall(r'\d{9,12}', clean)
-                for n in nums:
-                    if len(n) == 11 and n.startswith('4'):  # IDs Flex: 11 dígitos que empiezan con 4x
+                for n in re.findall(r'\d{9,12}', clean):
+                    if len(n) == 11 and n.startswith('4'):
                         found = n
                         break
                 if found:
@@ -266,60 +326,47 @@ def extract_envio_id_per_label(pdf_path, label_pages):
 
 GAP_THRESHOLD = 8  # pt minimo de separacion vertical para nuevo pedido
 
-def is_order_header(word_text, next_left_word_text):
-    """
-    Un word de la col izquierda es encabezado de pedido si:
-    - es UUID, O
-    - la siguiente palabra de la col izquierda empieza con Pack o Venta:
-    (esto detecta códigos de transportista como EC3EX20370482, MEL..., etc.)
-    """
-    if is_uuid(word_text):
-        return True
-    if next_left_word_text and next_left_word_text.startswith(('Pack', 'Venta:')):
-        # Excluir palabras que claramente no son IDs de pedido
-        t = word_text
-        if any(t.startswith(x) for x in ('SKU:', 'Color:', 'Cantidad:', 'ID:', 'Nombre')):
-            return False
-        if len(t) < 5:
-            return False
-        return True
-    return False
-
 def get_orders(page, known_ids, keywords, envio_type="Flex"):
+    """
+    Detecta pedidos en una página de armado.
+
+    Regla universal (ambos tipos):
+    - Un word en la columna izquierda (x0 < 150) es encabezado de pedido
+      si el SIGUIENTE word de esa columna empieza con 'Pack'
+      (línea 'Pack ID: XXXXXXXXX' inmediata al ID del pedido).
+    - Esto funciona para Flex (ID numérico 11 dígitos) y Colecta
+      (ID alfanumérico 26 chars, formato nuevo ML) sin validar el formato.
+
+    Para Flex también se confirma contra known_ids extraídos de las etiquetas
+    para mayor seguridad.
+    """
     words  = page.extract_words()
     page_h = page.height
     order_ids = []
 
-    if envio_type == "Colecta":
-        # Columna izquierda ordenada por posición vertical
-        left_words = sorted(
-            [w for w in words if w['x0'] < 220],
-            key=lambda w: w['top']
-        )
-        prev_bot = None
-        for idx, w in enumerate(left_words):
-            next_w = left_words[idx + 1] if idx + 1 < len(left_words) else None
-            next_text = next_w['text'] if next_w else None
+    # Columna izquierda ordenada por posición vertical
+    left_words = sorted(
+        [w for w in words if w['x0'] < 150],
+        key=lambda w: w['top']
+    )
 
-            if is_order_header(w['text'], next_text):
-                gap = (w['top'] - prev_bot) if prev_bot is not None else 999.0
-                already = any(o['id'] == w['text'] for o in order_ids)
-                if (gap >= GAP_THRESHOLD or not order_ids) and not already:
-                    order_ids.append({'id': w['text'], 'top': w['top'],
-                                      'id_x1': w['x1']})
-            # Actualizar prev_bot con cualquier word de columna izquierda
-            if prev_bot is None or w['bottom'] > prev_bot:
-                prev_bot = w['bottom']
-    else:
-        # Flex: anclar en IDs numéricos conocidos de las etiquetas
-        for w in words:
-            text = w['text']
-            nums = re.findall(r'\d{9,12}', text)
-            for num in nums:
-                if num in known_ids and len(num) == 11 and num.startswith('4') and w['x0'] < 200:
-                    if not any(o['id'] == num for o in order_ids):
-                        order_ids.append({'id': num, 'top': w['top'],
-                                          'id_x1': w.get('x1', 90)})
+    for idx, w in enumerate(left_words):
+        next_w    = left_words[idx + 1] if idx + 1 < len(left_words) else None
+        next_text = next_w['text'] if next_w else None
+
+        if not is_order_header(w['text'], next_text):
+            continue
+
+        # Para Flex: verificar además que el ID está en los conocidos de etiquetas
+        if envio_type == "Flex" and known_ids:
+            nums = re.findall(r'\d{9,12}', w['text'])
+            matched = any(n in known_ids and len(n) == 11 and n.startswith('4') for n in nums)
+            if not matched:
+                continue
+
+        already = any(o['id'] == w['text'] for o in order_ids)
+        if not already:
+            order_ids.append({'id': w['text'], 'top': w['top'], 'id_x1': w['x1']})
 
     order_ids.sort(key=lambda x: x['top'])
 
@@ -692,12 +739,16 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
     if logistica_map is None:
         logistica_map = {}
 
+    # Logística solo aplica a Flex (las Colecta las retira el camión colectivo,
+    # no tienen empresa de logística individual)
+    effective_logistica = logistica_map if envio_type == "Flex" else {}
+
     # Agregar logistica a cada orden (para mostrarla en el listado de armado)
     for orders in all_orders:
         for order in orders:
-            order['logistica'] = logistica_map.get(order['id'], '')
+            order['logistica'] = effective_logistica.get(order['id'], '')
 
-    # Mapa etiqueta → envio ID (para lookup de logistica)
+    # Mapa etiqueta → envio ID (para lookup de logistica en Flex)
     ids_per_label = extract_envio_id_per_label(pdf_path, label_pages)
     label_page_to_envio_id = {label_pages[i]: ids_per_label[i] for i in range(len(label_pages))}
 
@@ -726,8 +777,9 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
     pdf_bytes = original_pdf_bytes
     for page_idx in label_pages:
         order_num = label_to_order.get(page_idx, "?")
-        envio_id = label_page_to_envio_id.get(page_idx, "")
-        logistica = logistica_map.get(envio_id, "")
+        # Logística: solo Flex, vacío para Colecta
+        envio_id  = label_page_to_envio_id.get(page_idx, "")
+        logistica = effective_logistica.get(envio_id, "")
         pdf_bytes = overlay_number_on_label(pdf_bytes, page_idx, order_num,
                                             font_size_pt=int(font_size_num * 0.9),
                                             logistica=logistica)
