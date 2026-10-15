@@ -274,22 +274,6 @@ def extract_ids_from_labels(pdf_path, label_pages):
 
     return envio_ids, envio_type
 
-def extract_pack_id_per_label(pdf_path, label_pages):
-    """
-    Devuelve lista con el Pack ID (str) de cada página de etiqueta, en orden.
-    El Pack ID aparece en ambos tipos (Flex y Colecta) y sirve para cruzar
-    etiqueta ↔ pedido en el listado de armado.
-    Si no se detecta en una página, devuelve "" para ese índice.
-    """
-    result = []
-    pack_re = re.compile(r'Pack\s*ID\s*:?\s*(\d{10,20})')
-    with pdfplumber.open(pdf_path) as pdf:
-        for i in label_pages:
-            text = pdf.pages[i].extract_text() or ""
-            m = pack_re.search(text)
-            result.append(m.group(1) if m else "")
-    return result
-
 def extract_envio_id_per_label(pdf_path, label_pages):
     """
     Devuelve lista con el envío ID (str) de cada página de etiqueta, en orden.
