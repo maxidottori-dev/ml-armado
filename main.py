@@ -503,12 +503,15 @@ def annotate_label_page(img, order_num, font_size_num=30):
     return img
 
 
-def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36, logistica=""):
+def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36, logistica="", zone_y_top=10):
     """
     Genera un PDF de una página con el número superpuesto como texto vectorial
     en la zona libre superior derecha de la etiqueta.
-    Zona libre aprox: x 170-283.5pt, y (page_height - 74) a (page_height - 10)pt
+    Zona libre aprox: x 170-283.5pt, y (page_height - 74) a (page_height - zone_y_top)pt
     (reportlab usa origen abajo-izquierda, PDF usa origen arriba-izquierda)
+
+    zone_y_top=10  → Flex (zona completa, y=10-74)
+    zone_y_top=50  → Colecta (zona reducida, y=50-74, evita el ícono ✈️ en y=10-40)
     """
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(page_width_pt, page_height_pt))
@@ -516,8 +519,8 @@ def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36, 
     # Zona libre en coordenadas PDF (origen abajo-izquierda)
     zone_x1 = 170
     zone_x2 = page_width_pt - 4
-    zone_y1 = page_height_pt - 74   # parte inferior de la zona (top=74 en coords arriba)
-    zone_y2 = page_height_pt - 10   # parte superior (top=10 en coords arriba)
+    zone_y1 = page_height_pt - 74         # parte inferior de la zona (top=74 en coords arriba)
+    zone_y2 = page_height_pt - zone_y_top # parte superior (top=zone_y_top en coords arriba)
     zone_w = zone_x2 - zone_x1
     zone_h = zone_y2 - zone_y1
 
@@ -567,10 +570,11 @@ def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36, 
     return buf
 
 
-def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36, logistica=""):
+def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36, logistica="", zone_y_top=10):
     """
     Superpone el número como texto vectorial sobre la página de etiqueta indicada.
     Devuelve bytes del PDF resultante.
+    zone_y_top=10 → Flex | zone_y_top=50 → Colecta (evita ícono ✈️)
     """
     reader = PdfReader(io.BytesIO(input_pdf_bytes))
     writer = PdfWriter()
@@ -579,7 +583,8 @@ def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36, 
         if i == page_idx:
             w = float(page.mediabox.width)
             h = float(page.mediabox.height)
-            overlay_buf = make_number_overlay(number, w, h, font_size_pt=font_size_pt, logistica=logistica)
+            overlay_buf = make_number_overlay(number, w, h, font_size_pt=font_size_pt,
+                                              logistica=logistica, zone_y_top=zone_y_top)
             overlay_reader = PdfReader(overlay_buf)
             page.merge_page(overlay_reader.pages[0])
         writer.add_page(page)
@@ -780,9 +785,12 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
         # Logística: solo Flex, vacío para Colecta
         envio_id  = label_page_to_envio_id.get(page_idx, "")
         logistica = effective_logistica.get(envio_id, "")
+        # Colecta: zona y=50-74 para no tapar el ícono ✈️ en y=10-40
+        label_zone_y_top = 50 if envio_type == "Colecta" else 10
         pdf_bytes = overlay_number_on_label(pdf_bytes, page_idx, order_num,
                                             font_size_pt=int(font_size_num * 0.9),
-                                            logistica=logistica)
+                                            logistica=logistica,
+                                            zone_y_top=label_zone_y_top)
 
     # ── Paso 2: reemplazar páginas de armado con versión anotada (imagen) ──
     reader = PdfReader(io.BytesIO(pdf_bytes))
