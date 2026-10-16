@@ -212,23 +212,54 @@ def load_font(size):
 #     return False
 # FIN BACKUP
 
+def is_order_id_format(t):
+    """
+    ¿El texto tiene formato de ID de pedido de ML?
+    Formatos válidos:
+      - 11 dígitos que empiezan con 4 (Flex numérico, ej: 48258602525)
+      - 26 chars alfanumérico mayúscula (nuevo formato ML, ej: JU4OEXVE7ZI6HH2QGAFOM2ELEY)
+      - UUID hex con guiones (Colecta viejo, ej: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+    Descarta:
+      - Pack IDs: 15-18 dígitos que empiezan con 2 (ej: 2000015527042977)
+    """
+    import re
+    # UUID con guiones (Colecta)
+    if t.count('-') == 4 and 30 <= len(t) <= 50:
+        return True
+    # Formato alfanumérico 26 chars (nuevo ML)
+    if re.match(r'^[A-Z0-9]{20,30}$', t):
+        return True
+    # Numérico 11 dígitos que empieza con 4 (Flex clásico)
+    if re.match(r'^4\d{10}$', t):
+        return True
+    return False
+
 def is_order_header(word_text, next_left_word_text):
     """
     Regla universal (Flex y Colecta, formato nuevo y viejo):
     Un word de la columna izquierda es encabezado de pedido si
-    la siguiente palabra de esa columna empieza con 'Pack' O con 'Venta:'
-    (algunos pedidos no tienen línea Pack ID y van directo a Venta).
-    No se valida el formato del ID — el ancla es la confirmación.
+    la siguiente palabra de esa columna empieza con 'Pack' (cualquier ID)
+    O empieza con 'Venta:' (pedidos sin Pack ID) Y el word tiene formato de ID.
+
+    El filtro de formato en el caso Venta: es clave para NO confundir
+    el Pack ID numérico (ej: 2000015527042977) con un ID de pedido,
+    ya que el Pack ID también tiene 'Venta:' como siguiente word.
     """
     if not next_left_word_text:
         return False
-    if not (next_left_word_text.startswith('Pack') or next_left_word_text.startswith('Venta:')):
+    uses_pack_anchor  = next_left_word_text.startswith('Pack')
+    uses_venta_anchor = next_left_word_text.startswith('Venta:')
+    if not (uses_pack_anchor or uses_venta_anchor):
         return False
     # Excluir explícitamente tokens que no son IDs de pedido
     t = word_text
     if any(t.startswith(x) for x in ('SKU:', 'Color:', 'Cantidad:', 'ID:', 'Nombre:', 'Pack', 'Venta:')):
         return False
     if len(t) < 5:
+        return False
+    # Validar que el texto tiene formato de ID de pedido real.
+    # Cubre el caso Pack ID (2000015527042977) que puede tener Pack o Venta: como siguiente word.
+    if not is_order_id_format(t):
         return False
     return True
 
