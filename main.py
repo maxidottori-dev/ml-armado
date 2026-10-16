@@ -216,11 +216,13 @@ def is_order_header(word_text, next_left_word_text):
     """
     Regla universal (Flex y Colecta, formato nuevo y viejo):
     Un word de la columna izquierda es encabezado de pedido si
-    la siguiente palabra de esa columna empieza con 'Pack'
-    (línea 'Pack ID: XXXXXXXXX' inmediata al ID).
-    No se valida el formato del ID — el Pack ID es la confirmación.
+    la siguiente palabra de esa columna empieza con 'Pack' O con 'Venta:'
+    (algunos pedidos no tienen línea Pack ID y van directo a Venta).
+    No se valida el formato del ID — el ancla es la confirmación.
     """
-    if not next_left_word_text or not next_left_word_text.startswith('Pack'):
+    if not next_left_word_text:
+        return False
+    if not (next_left_word_text.startswith('Pack') or next_left_word_text.startswith('Venta:')):
         return False
     # Excluir explícitamente tokens que no son IDs de pedido
     t = word_text
@@ -316,13 +318,12 @@ def get_orders(page, known_ids, keywords, envio_type="Flex"):
 
     Regla universal (ambos tipos):
     - Un word en la columna izquierda (x0 < 150) es encabezado de pedido
-      si el SIGUIENTE word de esa columna empieza con 'Pack'
-      (línea 'Pack ID: XXXXXXXXX' inmediata al ID del pedido).
-    - Esto funciona para Flex (ID numérico 11 dígitos) y Colecta
-      (ID alfanumérico 26 chars, formato nuevo ML) sin validar el formato.
+      si el SIGUIENTE word de esa columna empieza con 'Pack' o con 'Venta:'
+      (algunos pedidos no tienen línea Pack ID y van directo a Venta).
+    - Funciona para Flex (IDs numéricos 11 dígitos y/o alfanuméricos 26 chars)
+      y Colecta (ID alfanumérico 26 chars) sin validar el formato.
 
-    Para Flex también se confirma contra known_ids extraídos de las etiquetas
-    para mayor seguridad.
+    Para Flex: IDs numéricos se cruzan con known_ids; alfanuméricos pasan directo.
     """
     words  = page.extract_words()
     page_h = page.height
@@ -341,12 +342,18 @@ def get_orders(page, known_ids, keywords, envio_type="Flex"):
         if not is_order_header(w['text'], next_text):
             continue
 
-        # Para Flex: verificar además que el ID está en los conocidos de etiquetas
+        # Para Flex: verificar contra known_ids sólo si el ID es numérico de 11 dígitos.
+        # Los IDs alfanuméricos de 26 chars (formato nuevo ML) no aparecen en las etiquetas
+        # → se incluyen directamente sin filtrar (la regla Pack/Venta ya los valida).
         if envio_type == "Flex" and known_ids:
             nums = re.findall(r'\d{9,12}', w['text'])
-            matched = any(n in known_ids and len(n) == 11 and n.startswith('4') for n in nums)
-            if not matched:
-                continue
+            has_numeric = any(len(n) == 11 and n.startswith('4') for n in nums)
+            if has_numeric:
+                # ID numérico: debe estar en known_ids
+                matched = any(n in known_ids for n in nums if len(n) == 11 and n.startswith('4'))
+                if not matched:
+                    continue
+            # else: ID alfanumérico (26 chars) → pasa sin filtrar
 
         already = any(o['id'] == w['text'] for o in order_ids)
         if not already:
