@@ -352,18 +352,49 @@ def extract_envio_id_per_label(pdf_path, label_pages):
 
 GAP_THRESHOLD = 8  # pt minimo de separacion vertical para nuevo pedido
 
+def _looks_like_order_id(text):
+    """¿Este texto parece un ID de envío (no un nombre propio)?"""
+    # Todo mayúsculas alfanumérico (alphaId, OCASA, etc.)
+    if re.match(r'^[A-Z0-9]{8,}$', text):
+        return True
+    # Solo dígitos (numérico largo)
+    if re.match(r'^\d{8,}$', text):
+        return True
+    # UUID con guiones
+    if text.count('-') == 4 and len(text) >= 30:
+        return True
+    return False
+
+def _find_alpha_id(left_words, venta_idx):
+    """
+    Dado el índice de 'Venta:' en left_words, busca hacia atrás el alphaId
+    saltando Pack, ID: y el número de Pack ID (empieza con 200001...).
+    Devuelve el word dict o None.
+    """
+    SKIP = {'Pack', 'ID:'}
+    for j in range(venta_idx - 1, -1, -1):
+        t = left_words[j]['text']
+        if t in SKIP:
+            continue
+        if re.match(r'^200001\d+$', t):   # Pack ID number
+            continue
+        if _looks_like_order_id(t):
+            return left_words[j]
+        # Llegamos a un nombre propio (destinatario del pedido anterior) → no hay alphaId
+        break
+    return None
+
 def get_orders(page, known_ids, keywords, envio_type="Flex"):
     """
     Detecta pedidos en una página de armado.
 
-    Regla universal (ambos tipos):
-    - Un word en la columna izquierda (x0 < 150) es encabezado de pedido
-      si el SIGUIENTE word de esa columna empieza con 'Pack' o con 'Venta:'
-      (algunos pedidos no tienen línea Pack ID y van directo a Venta).
-    - Funciona para Flex (IDs numéricos 11 dígitos y/o alfanuméricos 26 chars)
-      y Colecta (ID alfanumérico 26 chars) sin validar el formato.
-
-    Para Flex: IDs numéricos se cruzan con known_ids; alfanuméricos pasan directo.
+    Nueva lógica (ancla en 'Venta:'):
+    - Cada ocurrencia de 'Venta:' en la columna izquierda (x0 < 150) marca un pedido.
+    - El ventaId es la palabra inmediatamente siguiente a 'Venta:' en la misma línea.
+    - El alphaId (nroSeguimiento) se obtiene buscando hacia atrás desde 'Venta:',
+      saltando Pack / ID: / Pack ID numérico.
+    - Si no hay alphaId separado, se usa el ventaId como identificador del pedido.
+    - Funciona para Flex y Colecta sin depender del formato del ID de envío.
     """
     words  = page.extract_words()
     page_h = page.height
@@ -375,29 +406,42 @@ def get_orders(page, known_ids, keywords, envio_type="Flex"):
         key=lambda w: w['top']
     )
 
-    for idx, w in enumerate(left_words):
-        next_w    = left_words[idx + 1] if idx + 1 < len(left_words) else None
-        next_text = next_w['text'] if next_w else None
-
-        if not is_order_header(w['text'], next_text):
+    for idx, lw in enumerate(left_words):
+        if lw['text'] != 'Venta:':
             continue
 
-        # Para Flex: verificar contra known_ids sólo si el ID es numérico de 11 dígitos.
-        # Los IDs alfanuméricos de 26 chars (formato nuevo ML) no aparecen en las etiquetas
-        # → se incluyen directamente sin filtrar (la regla Pack/Venta ya los valida).
-        if envio_type == "Flex" and known_ids:
-            nums = re.findall(r'\d{9,12}', w['text'])
-            has_numeric = any(len(n) == 11 and n.startswith('4') for n in nums)
-            if has_numeric:
-                # ID numérico: debe estar en known_ids
-                matched = any(n in known_ids for n in nums if len(n) == 11 and n.startswith('4'))
-                if not matched:
-                    continue
-            # else: ID alfanumérico (26 chars) → pasa sin filtrar
+        # ventaId: palabra en la misma línea a la derecha de 'Venta:'
+        venta_id = None
+        for w in words:
+            if abs(w['top'] - lw['top']) < 3 and w['x0'] > lw['x0']:
+                venta_id = w['text']
+                break
 
-        already = any(o['id'] == w['text'] for o in order_ids)
-        if not already:
-            order_ids.append({'id': w['text'], 'top': w['top'], 'id_x1': w['x1']})
+        # alphaId: buscar hacia atrás en la columna izquierda
+        alpha_word = _find_alpha_id(left_words, idx)
+
+        if alpha_word:
+            order_id  = alpha_word['text']
+            order_top = alpha_word['top']
+            order_x1  = alpha_word['x1']
+        elif venta_id:
+            # Sin alphaId separado: usar ventaId como id
+            order_id  = venta_id
+            order_top = lw['top']
+            order_x1  = lw['x1']
+        else:
+            continue  # no se pudo identificar el pedido
+
+        # Evitar duplicados
+        if any(o['id'] == order_id for o in order_ids):
+            continue
+
+        order_ids.append({
+            'id':       order_id,
+            'venta_id': venta_id,
+            'top':      order_top,
+            'id_x1':    order_x1,
+        })
 
     order_ids.sort(key=lambda x: x['top'])
 
@@ -781,10 +825,14 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
     # no tienen empresa de logística individual)
     effective_logistica = logistica_map if envio_type == "Flex" else {}
 
-    # Agregar logistica a cada orden (para mostrarla en el listado de armado)
+    # Agregar logistica a cada orden (para mostrarla en el listado de armado).
+    # Buscar por alphaId primero, luego por ventaId (# de venta) como fallback.
     for orders in all_orders:
         for order in orders:
-            order['logistica'] = effective_logistica.get(order['id'], '')
+            log = effective_logistica.get(order['id'], '')
+            if not log and order.get('venta_id'):
+                log = effective_logistica.get(order['venta_id'], '')
+            order['logistica'] = log
 
     # Mapa etiqueta → envio ID (para lookup de logistica en Flex)
     ids_per_label = extract_envio_id_per_label(pdf_path, label_pages)
