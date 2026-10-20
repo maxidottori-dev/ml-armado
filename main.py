@@ -219,6 +219,8 @@ def is_order_id_format(t):
       - 11 dígitos que empiezan con 4 (Flex numérico, ej: 48258602525)
       - 26 chars alfanumérico mayúscula (nuevo formato ML, ej: JU4OEXVE7ZI6HH2QGAFOM2ELEY)
       - UUID hex con guiones (Colecta viejo, ej: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+      - Alfanumérico 10-19 chars mayúscula (OCASA, ej: EC3BX29894030)
+      - Numérico 12+ dígitos que NO empieza con 2 (Andreani/OCA, ej: 399999936141524)
     Descarta:
       - Pack IDs: 15-18 dígitos que empiezan con 2 (ej: 2000015527042977)
     """
@@ -226,11 +228,18 @@ def is_order_id_format(t):
     # UUID con guiones (Colecta)
     if t.count('-') == 4 and 30 <= len(t) <= 50:
         return True
-    # Formato alfanumérico 26 chars (nuevo ML)
+    # Formato alfanumérico largo 20-30 chars (nuevo ML)
     if re.match(r'^[A-Z0-9]{20,30}$', t):
+        return True
+    # Formato alfanumérico corto 10-19 chars (OCASA y otros couriers, ej: EC3BX29894030)
+    if re.match(r'^[A-Z][A-Z0-9]{9,18}$', t):
         return True
     # Numérico 11 dígitos que empieza con 4 (Flex clásico)
     if re.match(r'^4\d{10}$', t):
+        return True
+    # Numérico 12+ dígitos que NO empieza con 2 (Andreani/OCA, ej: 399999936141524)
+    # Excluye Pack IDs (siempre empiezan con 2)
+    if re.match(r'^[^2]\d{11,}$', t):
         return True
     return False
 
@@ -483,12 +492,14 @@ def annotate_page(img, orders, order_number_start=1, font_size_num=30, font_size
     return img
 
 
-def annotate_label_page(img, order_num, font_size_num=30):
+def annotate_label_page(img, order_num, font_size_num=30, zone_y_top=10):
     """
     Agrega el número de pedido centrado en el espacio libre superior derecho
     de la etiqueta (derecha del bloque de texto del remitente, arriba de
     la fila FLEX/XBA3-Despachar).
-    Zona libre: x 170-283.5pt, y 10-75pt (igual en Flex y Colecta).
+    Zona libre: x 170-fin, y zone_y_top-74pt.
+      zone_y_top=10  → Flex (zona completa)
+      zone_y_top=50  → Colecta (evita el ícono ✈️ en y=10-40)
     """
     draw = ImageDraw.Draw(img, 'RGBA')
     # Fuente 20% más grande que el armado; auto-reduce si no entra
@@ -500,7 +511,7 @@ def annotate_label_page(img, order_num, font_size_num=30):
     # Zona libre en píxeles
     zone_x1 = int(170 * SCALE)
     zone_x2 = img.width - int(4 * SCALE)
-    zone_y1 = int(10 * SCALE)
+    zone_y1 = int(zone_y_top * SCALE)
     zone_y2 = int(74 * SCALE)
     zone_w = zone_x2 - zone_x1
     zone_h = zone_y2 - zone_y1
