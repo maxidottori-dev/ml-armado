@@ -49,6 +49,38 @@ def save_keywords_to_fb(keywords: str):
     except Exception:
         pass
 
+def get_logistica_map_from_fb():
+    """
+    Consulta la colección 'envios' en Firestore y devuelve un mapa
+    { nroSeguimiento: "ZONA · tipoEntrega" } para usarlo en las anotaciones.
+    Solo incluye envíos con nroSeguimiento definido.
+    """
+    try:
+        db = get_firestore()
+        docs = db.collection("envios").stream()
+        lmap = {}
+        for doc in docs:
+            d = doc.to_dict()
+            nro = d.get("nroSeguimiento", "").strip()
+            if not nro:
+                continue
+            zona = d.get("zona", "").strip()
+            tipo = d.get("tipoEntrega", "").strip()
+            # Construir etiqueta compacta: zona si existe, o tipo, o ambos
+            if zona and tipo:
+                label = f"{zona}"
+            elif zona:
+                label = zona
+            elif tipo:
+                label = tipo
+            else:
+                continue
+            lmap[nro] = label
+        return lmap
+    except Exception as e:
+        print(f"[logistica_map] Error consultando Firestore: {e}")
+        return {}
+
 DPI   = 150
 SCALE = DPI / 72.0
 BASE  = Path(__file__).parent
@@ -992,6 +1024,10 @@ async def process(
         lmap = json.loads(logistica_map) if logistica_map else {}
     except Exception:
         lmap = {}
+    # Si no se envió un logistica_map desde el frontend, buscarlo en Firestore automáticamente
+    if not lmap:
+        lmap = get_logistica_map_from_fb()
+        print(f"[logistica_map] Auto-cargado desde Firestore: {len(lmap)} envíos")
     try:
         out_path, info = process_pdf(pdf_path, kw_list, start_number, header_offset,
                                      font_size_num, font_size_lbl, logistica_map=lmap)
