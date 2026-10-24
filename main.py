@@ -486,11 +486,13 @@ def get_orders(page, known_ids, keywords, envio_type="Flex"):
         order['box_bot'] = (max(w['bottom'] for w in my_words) + 5) if my_words else page_h
 
         flagged = set()
-        for w in my_words:
-            tl = normalize(w['text'])
-            for kw in keywords:
-                if normalize(kw) in tl:
-                    flagged.add(kw)
+        # Concatenar todo el texto del pedido para buscar keywords en contexto
+        full_text = " ".join(normalize(w['text']) for w in my_words)
+        for kw in keywords:
+            nkw = normalize(kw)
+            # Match por palabra completa para evitar falsos positivos (ej. "tapa" en "destapa")
+            if re.search(r'(?<![a-z])' + re.escape(nkw) + r'(?![a-z])', full_text):
+                flagged.add(kw)
         order['labels'] = flagged
 
     return order_ids
@@ -898,8 +900,8 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
         # Logística: solo Flex, vacío para Colecta
         envio_id  = label_page_to_envio_id.get(page_idx, "")
         logistica = effective_logistica.get(envio_id, "")
-        # Colecta: zona y=50-74 para no tapar el ícono ✈️ en y=10-40
-        label_zone_y_top = 50 if envio_type == "Colecta" else 10
+        # Colecta: misma zona que Flex (y=10-74). Las etiquetas Colecta no tienen ícono ✈️.
+        label_zone_y_top = 10
         pdf_bytes = overlay_number_on_label(pdf_bytes, page_idx, order_num,
                                             font_size_pt=int(font_size_num * 0.9),
                                             logistica=logistica,
