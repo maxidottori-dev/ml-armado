@@ -386,6 +386,9 @@ GAP_THRESHOLD = 8  # pt minimo de separacion vertical para nuevo pedido
 
 def _looks_like_order_id(text):
     """¿Este texto parece un ID de envío (no un nombre propio)?"""
+    # Excluir Pack IDs de ML (empiezan con 200001, 16+ dígitos) — no son alphaIds
+    if re.match(r'^200001\d+$', text):
+        return False
     # Todo mayúsculas alfanumérico (alphaId, OCASA, etc.)
     if re.match(r'^[A-Z0-9]{8,}$', text):
         return True
