@@ -692,14 +692,14 @@ def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36, 
     writer = PdfWriter()
 
     for i, page in enumerate(reader.pages):
+        writer.add_page(page)
         if i == page_idx:
             w = float(page.mediabox.width)
             h = float(page.mediabox.height)
             overlay_buf = make_number_overlay(number, w, h, font_size_pt=font_size_pt,
                                               logistica=logistica, zone_y_top=zone_y_top)
             overlay_reader = PdfReader(overlay_buf)
-            page.merge_page(overlay_reader.pages[0])
-        writer.add_page(page)
+            writer.pages[-1].merge_page(overlay_reader.pages[0])
 
     out_buf = io.BytesIO()
     writer.write(out_buf)
