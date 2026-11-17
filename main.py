@@ -49,6 +49,38 @@ def save_keywords_to_fb(keywords: str):
     except Exception:
         pass
 
+def get_logistica_map_from_fb():
+    """
+    Consulta la colección 'envios' en Firestore y devuelve un mapa
+    { nroSeguimiento: "ZONA · tipoEntrega" } para usarlo en las anotaciones.
+    Solo incluye envíos con nroSeguimiento definido.
+    """
+    try:
+        db = get_firestore()
+        docs = db.collection("envios").stream()
+        lmap = {}
+        for doc in docs:
+            d = doc.to_dict()
+            nro = d.get("nroSeguimiento", "").strip()
+            if not nro:
+                continue
+            zona = d.get("zona", "").strip()
+            tipo = d.get("tipoEntrega", "").strip()
+            # Construir etiqueta compacta: zona si existe, o tipo, o ambos
+            if zona and tipo:
+                label = f"{zona}"
+            elif zona:
+                label = zona
+            elif tipo:
+                label = tipo
+            else:
+                continue
+            lmap[nro] = label
+        return lmap
+    except Exception as e:
+        print(f"[logistica_map] Error consultando Firestore: {e}")
+        return {}
+
 DPI   = 150
 SCALE = DPI / 72.0
 BASE  = Path(__file__).parent
@@ -191,17 +223,86 @@ def load_font(size):
         except: continue
     return ImageFont.load_default()
 
-# ── UUID detection ────────────────────────────────────────
-def is_uuid(text):
-    """Detecta UUIDs tolerando ligadura 'fi' del extractor de PDF."""
-    if text.startswith('SKU:') or text.startswith('MEL'):
+# ── Order ID detection ────────────────────────────────────
+# BACKUP: funciones anteriores (UUID-based, formato viejo ML)
+# def is_uuid_old(text):
+#     """Detecta UUIDs tolerando ligadura 'fi' del extractor de PDF."""
+#     if text.startswith('SKU:') or text.startswith('MEL'): return False
+#     if text.count('-') != 4: return False
+#     if len(text) < 30 or len(text) > 50: return False
+#     allowed = set('0123456789abcdefABCDEFfi-')
+#     return all(c in allowed for c in text)
+#
+# def is_order_header_old(word_text, next_left_word_text):
+#     if is_uuid_old(word_text): return True
+#     if next_left_word_text and next_left_word_text.startswith(('Pack', 'Venta:')):
+#         t = word_text
+#         if any(t.startswith(x) for x in ('SKU:', 'Color:', 'Cantidad:', 'ID:', 'Nombre')):
+#             return False
+#         if len(t) < 5: return False
+#         return True
+#     return False
+# FIN BACKUP
+
+def is_order_id_format(t):
+    """
+    ¿El texto tiene formato de ID de pedido de ML?
+    Formatos válidos:
+      - 11 dígitos que empiezan con 4 (Flex numérico, ej: 48258602525)
+      - 26 chars alfanumérico mayúscula (nuevo formato ML, ej: JU4OEXVE7ZI6HH2QGAFOM2ELEY)
+      - UUID hex con guiones (Colecta viejo, ej: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+      - Alfanumérico 10-19 chars mayúscula (OCASA, ej: EC3BX29894030)
+      - Numérico 12+ dígitos que NO empieza con 2 (Andreani/OCA, ej: 399999936141524)
+    Descarta:
+      - Pack IDs: 15-18 dígitos que empiezan con 2 (ej: 2000015527042977)
+    """
+    import re
+    # UUID con guiones (Colecta)
+    if t.count('-') == 4 and 30 <= len(t) <= 50:
+        return True
+    # Formato alfanumérico largo 20-30 chars (nuevo ML)
+    if re.match(r'^[A-Z0-9]{20,30}$', t):
+        return True
+    # Formato alfanumérico corto 10-19 chars (OCASA y otros couriers, ej: EC3BX29894030)
+    if re.match(r'^[A-Z][A-Z0-9]{9,18}$', t):
+        return True
+    # Numérico 11 dígitos que empieza con 4 (Flex clásico)
+    if re.match(r'^4\d{10}$', t):
+        return True
+    # Numérico 12+ dígitos que NO empieza con 2 (Andreani/OCA, ej: 399999936141524)
+    # Excluye Pack IDs (siempre empiezan con 2)
+    if re.match(r'^[^2]\d{11,}$', t):
+        return True
+    return False
+
+def is_order_header(word_text, next_left_word_text):
+    """
+    Regla universal (Flex y Colecta, formato nuevo y viejo):
+    Un word de la columna izquierda es encabezado de pedido si
+    la siguiente palabra de esa columna empieza con 'Pack' (cualquier ID)
+    O empieza con 'Venta:' (pedidos sin Pack ID) Y el word tiene formato de ID.
+
+    El filtro de formato en el caso Venta: es clave para NO confundir
+    el Pack ID numérico (ej: 2000015527042977) con un ID de pedido,
+    ya que el Pack ID también tiene 'Venta:' como siguiente word.
+    """
+    if not next_left_word_text:
         return False
-    if text.count('-') != 4:
+    uses_pack_anchor  = next_left_word_text.startswith('Pack')
+    uses_venta_anchor = next_left_word_text.startswith('Venta:')
+    if not (uses_pack_anchor or uses_venta_anchor):
         return False
-    if len(text) < 30 or len(text) > 50:
+    # Excluir explícitamente tokens que no son IDs de pedido
+    t = word_text
+    if any(t.startswith(x) for x in ('SKU:', 'Color:', 'Cantidad:', 'ID:', 'Nombre:', 'Pack', 'Venta:')):
         return False
-    allowed = set('0123456789abcdefABCDEFfi-')
-    return all(c in allowed for c in text)
+    if len(t) < 5:
+        return False
+    # Validar que el texto tiene formato de ID de pedido real.
+    # Cubre el caso Pack ID (2000015527042977) que puede tener Pack o Venta: como siguiente word.
+    if not is_order_id_format(t):
+        return False
+    return True
 
 # ── PDF Analysis ──────────────────────────────────────────
 def split_pages(pdf_path):
@@ -217,9 +318,13 @@ def split_pages(pdf_path):
 
 def extract_ids_from_labels(pdf_path, label_pages):
     """
-    Detecta tipo de envío y extrae IDs de etiquetas.
-    Colecta: UUIDs están solo en páginas de armado, no en etiquetas.
-    Flex: los IDs numéricos (466xxxxxxx) aparecen en etiquetas.
+    Detecta tipo de envío (Flex o Colecta) y extrae IDs de etiquetas.
+
+    Lógica:
+    - Si cualquier etiqueta contiene 'FLEX' → Flex, sino → Colecta.
+    - Flex: extrae números de envío (11 dígitos que empiezan con 4).
+    - Colecta: los IDs están en las páginas de armado, no en etiquetas
+      → devuelve set vacío (es correcto, no es un error).
     """
     envio_ids  = set()
     envio_type = "Colecta"
@@ -227,36 +332,49 @@ def extract_ids_from_labels(pdf_path, label_pages):
     with pdfplumber.open(pdf_path) as pdf:
         for i in label_pages:
             text = pdf.pages[i].extract_text() or ""
-            words = pdf.pages[i].extract_words()
 
-            if "Envío Flex" in text or "Envio Flex" in text or re.search(r'\bFLEX\b', text):
+            # Detección de tipo: basta con que UNA etiqueta diga FLEX
+            if re.search(r'\bFLEX\b', text):
                 envio_type = "Flex"
 
-            for w in words:
-                clean = re.sub(r'\s+', '', w['text'])
-                nums = re.findall(r'\d{9,12}', clean)
-                for n in nums:
-                    if len(n) == 11 and n.startswith('4'):  # IDs Flex: 11 dígitos que empiezan con 4x
-                        envio_ids.add(n)
+            # Para Flex: extraer número de envío (11 dígitos, empieza con 4)
+            # Para Colecta: no necesitamos IDs de etiqueta, usamos Pack ID del armado
+            if envio_type == "Flex":
+                for w in pdf.pages[i].extract_words():
+                    clean = re.sub(r'\s+', '', w['text'])
+                    for n in re.findall(r'\d{9,12}', clean):
+                        if len(n) == 11 and n.startswith('4'):
+                            envio_ids.add(n)
 
     return envio_ids, envio_type
 
 def extract_envio_id_per_label(pdf_path, label_pages):
     """
-    Devuelve una lista con el envio ID (str) de cada pagina de etiqueta, en orden.
-    Si no se detecta ID en una pagina, devuelve "" para ese indice.
-    Solo aplica a Flex (IDs numericos que empiezan con 46).
+    Devuelve lista con el envío ID (str) de cada página de etiqueta, en orden.
+    - Flex: número de envío 11 dígitos (empieza con 4) — es la clave del logistica_map.
+    - Colecta: sin logística individual → siempre devuelve "" (no aplica).
     """
+    # Primero detectar el tipo para no procesar Colecta innecesariamente
+    envio_type = "Colecta"
+    with pdfplumber.open(pdf_path) as pdf:
+        for i in label_pages:
+            text = pdf.pages[i].extract_text() or ""
+            if re.search(r'\bFLEX\b', text):
+                envio_type = "Flex"
+                break
+
     result = []
+    if envio_type != "Flex":
+        # Colecta no tiene logística individual → lista de cadenas vacías
+        return [""] * len(label_pages)
+
     with pdfplumber.open(pdf_path) as pdf:
         for i in label_pages:
             found = ""
-            words = pdf.pages[i].extract_words()
-            for w in words:
+            for w in pdf.pages[i].extract_words():
                 clean = re.sub(r'\s+', '', w['text'])
-                nums = re.findall(r'\d{9,12}', clean)
-                for n in nums:
-                    if len(n) == 11 and n.startswith('4'):  # IDs Flex: 11 dígitos que empiezan con 4x
+                for n in re.findall(r'\d{9,12}', clean):
+                    if len(n) == 11 and n.startswith('4'):
                         found = n
                         break
                 if found:
@@ -266,60 +384,97 @@ def extract_envio_id_per_label(pdf_path, label_pages):
 
 GAP_THRESHOLD = 8  # pt minimo de separacion vertical para nuevo pedido
 
-def is_order_header(word_text, next_left_word_text):
-    """
-    Un word de la col izquierda es encabezado de pedido si:
-    - es UUID, O
-    - la siguiente palabra de la col izquierda empieza con Pack o Venta:
-    (esto detecta códigos de transportista como EC3EX20370482, MEL..., etc.)
-    """
-    if is_uuid(word_text):
+def _looks_like_order_id(text):
+    """¿Este texto parece un ID de envío (no un nombre propio)?"""
+    # Todo mayúsculas alfanumérico (alphaId, OCASA, etc.)
+    if re.match(r'^[A-Z0-9]{8,}$', text):
         return True
-    if next_left_word_text and next_left_word_text.startswith(('Pack', 'Venta:', 'Envio:')):
-        # Excluir palabras que claramente no son IDs de pedido
-        t = word_text
-        if any(t.startswith(x) for x in ('SKU:', 'Color:', 'Cantidad:', 'ID:', 'Nombre')):
-            return False
-        if len(t) < 5:
-            return False
+    # Solo dígitos (numérico largo)
+    if re.match(r'^\d{8,}$', text):
+        return True
+    # UUID con guiones
+    if text.count('-') == 4 and len(text) >= 30:
         return True
     return False
 
+def _find_alpha_id(left_words, venta_idx):
+    """
+    Dado el índice de 'Venta:' en left_words, busca hacia atrás el alphaId
+    saltando Pack, ID: y el número de Pack ID (empieza con 200001...).
+    Devuelve el word dict o None.
+    """
+    SKIP = {'Pack', 'ID:'}
+    for j in range(venta_idx - 1, -1, -1):
+        t = left_words[j]['text']
+        if t in SKIP:
+            continue
+        if re.match(r'^200001\d+$', t):   # Pack ID number
+            continue
+        if _looks_like_order_id(t):
+            return left_words[j]
+        # Llegamos a un nombre propio (destinatario del pedido anterior) → no hay alphaId
+        break
+    return None
+
 def get_orders(page, known_ids, keywords, envio_type="Flex"):
+    """
+    Detecta pedidos en una página de armado.
+
+    Lógica (detección directa del alphaId):
+    - Un pedido comienza con su ID (alphaId, UUID, 11 dígitos, etc.) en la columna
+      izquierda (x0 < 150), seguido INMEDIATAMENTE por 'Pack', 'Venta:' o 'Envio:'.
+    - Funciona para Flex y Colecta (nuevo y viejo formato ML).
+      * Flex: alphaId → 'Pack' (con Pack ID) o 'Venta:' (sin Pack ID)
+      * Colecta nuevo: alphaId → 'Pack' (con Pack ID) o 'Envio:' (con nro de envío)
+    - anchor_value: número a la derecha de 'Venta:' o 'Envio:' (si existe).
+    """
     words  = page.extract_words()
     page_h = page.height
     order_ids = []
 
-    if envio_type == "Colecta":
-        # Columna izquierda ordenada por posición vertical
-        left_words = sorted(
-            [w for w in words if w['x0'] < 220],
-            key=lambda w: w['top']
-        )
-        prev_bot = None
-        for idx, w in enumerate(left_words):
-            next_w = left_words[idx + 1] if idx + 1 < len(left_words) else None
-            next_text = next_w['text'] if next_w else None
+    # Columna izquierda ordenada por posición vertical
+    left_words = sorted(
+        [w for w in words if w['x0'] < 150],
+        key=lambda w: w['top']
+    )
 
-            if is_order_header(w['text'], next_text):
-                gap = (w['top'] - prev_bot) if prev_bot is not None else 999.0
-                already = any(o['id'] == w['text'] for o in order_ids)
-                if (gap >= GAP_THRESHOLD or not order_ids) and not already:
-                    order_ids.append({'id': w['text'], 'top': w['top'],
-                                      'id_x1': w['x1']})
-            # Actualizar prev_bot con cualquier word de columna izquierda
-            if prev_bot is None or w['bottom'] > prev_bot:
-                prev_bot = w['bottom']
-    else:
-        # Flex: anclar en IDs numéricos conocidos de las etiquetas
-        for w in words:
-            text = w['text']
-            nums = re.findall(r'\d{9,12}', text)
-            for num in nums:
-                if num in known_ids and len(num) == 11 and num.startswith('4') and w['x0'] < 200:
-                    if not any(o['id'] == num for o in order_ids):
-                        order_ids.append({'id': num, 'top': w['top'],
-                                          'id_x1': w.get('x1', 90)})
+    for idx, lw in enumerate(left_words):
+        t = lw['text']
+        # El ID de pedido tiene formato reconocible (alphanumerico, UUID, numérico largo, etc.)
+        if not _looks_like_order_id(t):
+            continue
+        # La siguiente palabra en la columna izquierda debe ser un anchor conocido
+        next_lw = left_words[idx + 1] if idx + 1 < len(left_words) else None
+        if not next_lw:
+            continue
+        next_text = next_lw['text']
+        if not (next_text.startswith('Pack') or
+                next_text.startswith('Venta:') or
+                next_text.startswith('Envio:')):
+            continue
+
+        # Valor del anchor (nro de venta o de envío), solo para Venta:/Envio:
+        anchor_value = None
+        if next_text.startswith('Venta:') or next_text.startswith('Envio:'):
+            for w in words:
+                if abs(w['top'] - next_lw['top']) < 3 and w['x0'] > next_lw['x0']:
+                    anchor_value = w['text']
+                    break
+
+        order_id  = t
+        order_top = lw['top']
+        order_x1  = lw['x1']
+
+        # Evitar duplicados
+        if any(o['id'] == order_id for o in order_ids):
+            continue
+
+        order_ids.append({
+            'id':       order_id,
+            'venta_id': anchor_value,
+            'top':      order_top,
+            'id_x1':    order_x1,
+        })
 
     order_ids.sort(key=lambda x: x['top'])
 
@@ -332,11 +487,13 @@ def get_orders(page, known_ids, keywords, envio_type="Flex"):
         order['box_bot'] = (max(w['bottom'] for w in my_words) + 5) if my_words else page_h
 
         flagged = set()
-        for w in my_words:
-            tl = normalize(w['text'])
-            for kw in keywords:
-                if normalize(kw) in tl:
-                    flagged.add(kw)
+        # Concatenar todo el texto del pedido para buscar keywords en contexto
+        full_text = " ".join(normalize(w['text']) for w in my_words)
+        for kw in keywords:
+            nkw = normalize(kw)
+            # Match por palabra completa para evitar falsos positivos (ej. "tapa" en "destapa")
+            if re.search(r'(?<![a-z])' + re.escape(nkw) + r'(?![a-z])', full_text):
+                flagged.add(kw)
         order['labels'] = flagged
 
     return order_ids
@@ -414,12 +571,14 @@ def annotate_page(img, orders, order_number_start=1, font_size_num=30, font_size
     return img
 
 
-def annotate_label_page(img, order_num, font_size_num=30):
+def annotate_label_page(img, order_num, font_size_num=30, zone_y_top=10):
     """
     Agrega el número de pedido centrado en el espacio libre superior derecho
     de la etiqueta (derecha del bloque de texto del remitente, arriba de
     la fila FLEX/XBA3-Despachar).
-    Zona libre: x 170-283.5pt, y 10-75pt (igual en Flex y Colecta).
+    Zona libre: x 170-fin, y zone_y_top-74pt.
+      zone_y_top=10  → Flex (zona completa)
+      zone_y_top=50  → Colecta (evita el ícono ✈️ en y=10-40)
     """
     draw = ImageDraw.Draw(img, 'RGBA')
     # Fuente 20% más grande que el armado; auto-reduce si no entra
@@ -431,7 +590,7 @@ def annotate_label_page(img, order_num, font_size_num=30):
     # Zona libre en píxeles
     zone_x1 = int(170 * SCALE)
     zone_x2 = img.width - int(4 * SCALE)
-    zone_y1 = int(10 * SCALE)
+    zone_y1 = int(zone_y_top * SCALE)
     zone_y2 = int(74 * SCALE)
     zone_w = zone_x2 - zone_x1
     zone_h = zone_y2 - zone_y1
@@ -456,12 +615,15 @@ def annotate_label_page(img, order_num, font_size_num=30):
     return img
 
 
-def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36, logistica=""):
+def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36, logistica="", zone_y_top=10):
     """
     Genera un PDF de una página con el número superpuesto como texto vectorial
     en la zona libre superior derecha de la etiqueta.
-    Zona libre aprox: x 170-283.5pt, y (page_height - 74) a (page_height - 10)pt
+    Zona libre aprox: x 170-283.5pt, y (page_height - 74) a (page_height - zone_y_top)pt
     (reportlab usa origen abajo-izquierda, PDF usa origen arriba-izquierda)
+
+    zone_y_top=10  → Flex (zona completa, y=10-74)
+    zone_y_top=50  → Colecta (zona reducida, y=50-74, evita el ícono ✈️ en y=10-40)
     """
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(page_width_pt, page_height_pt))
@@ -469,8 +631,8 @@ def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36, 
     # Zona libre en coordenadas PDF (origen abajo-izquierda)
     zone_x1 = 170
     zone_x2 = page_width_pt - 4
-    zone_y1 = page_height_pt - 74   # parte inferior de la zona (top=74 en coords arriba)
-    zone_y2 = page_height_pt - 10   # parte superior (top=10 en coords arriba)
+    zone_y1 = page_height_pt - 74         # parte inferior de la zona (top=74 en coords arriba)
+    zone_y2 = page_height_pt - zone_y_top # parte superior (top=zone_y_top en coords arriba)
     zone_w = zone_x2 - zone_x1
     zone_h = zone_y2 - zone_y1
 
@@ -520,10 +682,11 @@ def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36, 
     return buf
 
 
-def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36, logistica=""):
+def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36, logistica="", zone_y_top=10):
     """
     Superpone el número como texto vectorial sobre la página de etiqueta indicada.
     Devuelve bytes del PDF resultante.
+    zone_y_top=10 → Flex | zone_y_top=50 → Colecta (evita ícono ✈️)
     """
     reader = PdfReader(io.BytesIO(input_pdf_bytes))
     writer = PdfWriter()
@@ -532,7 +695,8 @@ def overlay_number_on_label(input_pdf_bytes, page_idx, number, font_size_pt=36, 
         if i == page_idx:
             w = float(page.mediabox.width)
             h = float(page.mediabox.height)
-            overlay_buf = make_number_overlay(number, w, h, font_size_pt=font_size_pt, logistica=logistica)
+            overlay_buf = make_number_overlay(number, w, h, font_size_pt=font_size_pt,
+                                              logistica=logistica, zone_y_top=zone_y_top)
             overlay_reader = PdfReader(overlay_buf)
             page.merge_page(overlay_reader.pages[0])
         writer.add_page(page)
@@ -692,12 +856,20 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
     if logistica_map is None:
         logistica_map = {}
 
-    # Agregar logistica a cada orden (para mostrarla en el listado de armado)
+    # Logística solo aplica a Flex (las Colecta las retira el camión colectivo,
+    # no tienen empresa de logística individual)
+    effective_logistica = logistica_map if envio_type == "Flex" else {}
+
+    # Agregar logistica a cada orden (para mostrarla en el listado de armado).
+    # Buscar por alphaId primero, luego por ventaId (# de venta) como fallback.
     for orders in all_orders:
         for order in orders:
-            order['logistica'] = logistica_map.get(order['id'], '')
+            log = effective_logistica.get(order['id'], '')
+            if not log and order.get('venta_id'):
+                log = effective_logistica.get(order['venta_id'], '')
+            order['logistica'] = log
 
-    # Mapa etiqueta → envio ID (para lookup de logistica)
+    # Mapa etiqueta → envio ID (para lookup de logistica en Flex)
     ids_per_label = extract_envio_id_per_label(pdf_path, label_pages)
     label_page_to_envio_id = {label_pages[i]: ids_per_label[i] for i in range(len(label_pages))}
 
@@ -726,11 +898,15 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
     pdf_bytes = original_pdf_bytes
     for page_idx in label_pages:
         order_num = label_to_order.get(page_idx, "?")
-        envio_id = label_page_to_envio_id.get(page_idx, "")
-        logistica = logistica_map.get(envio_id, "")
+        # Logística: solo Flex, vacío para Colecta
+        envio_id  = label_page_to_envio_id.get(page_idx, "")
+        logistica = effective_logistica.get(envio_id, "")
+        # Colecta: misma zona que Flex (y=10-74). Las etiquetas Colecta no tienen ícono ✈️.
+        label_zone_y_top = 10
         pdf_bytes = overlay_number_on_label(pdf_bytes, page_idx, order_num,
                                             font_size_pt=int(font_size_num * 0.9),
-                                            logistica=logistica)
+                                            logistica=logistica,
+                                            zone_y_top=label_zone_y_top)
 
     # ── Paso 2: reemplazar páginas de armado con versión anotada (imagen) ──
     reader = PdfReader(io.BytesIO(pdf_bytes))
@@ -851,6 +1027,10 @@ async def process(
         lmap = json.loads(logistica_map) if logistica_map else {}
     except Exception:
         lmap = {}
+    # Si no se envió un logistica_map desde el frontend, buscarlo en Firestore automáticamente
+    if not lmap:
+        lmap = get_logistica_map_from_fb()
+        print(f"[logistica_map] Auto-cargado desde Firestore: {len(lmap)} envíos")
     try:
         out_path, info = process_pdf(pdf_path, kw_list, start_number, header_offset,
                                      font_size_num, font_size_lbl, logistica_map=lmap)
