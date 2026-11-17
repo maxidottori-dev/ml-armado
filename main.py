@@ -275,7 +275,7 @@ def is_order_header(word_text, next_left_word_text):
     """
     if is_uuid(word_text):
         return True
-    if next_left_word_text and next_left_word_text.startswith(('Pack', 'Venta:')):
+    if next_left_word_text and next_left_word_text.startswith(('Pack', 'Venta:', 'Envio:')):
         # Excluir palabras que claramente no son IDs de pedido
         t = word_text
         if any(t.startswith(x) for x in ('SKU:', 'Color:', 'Cantidad:', 'ID:', 'Nombre')):
