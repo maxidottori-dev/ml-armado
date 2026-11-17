@@ -634,45 +634,74 @@ def make_number_overlay(number, page_width_pt, page_height_pt, font_size_pt=36, 
     zone_h = zone_y2 - zone_y1
 
     text = str(number)
+    pad = 4
 
-    # Auto-ajustar tamaño para que entre en la zona
+    # Calcular tamaños de logistica y numero
+    fs_log = max(8, int(font_size_pt * 0.38)) if logistica else 0
+
+    # Auto-ajustar tamaño para que numero + logistica entren en la zona
     fs = font_size_pt
     while fs > 8:
         c.setFont("Helvetica-Bold", fs)
         tw = c.stringWidth(text, "Helvetica-Bold", fs)
         th = fs * 1.1
-        if tw <= zone_w and th <= zone_h:
+        fs_log = max(8, int(fs * 0.38)) if logistica else 0
+        th_log = fs_log * 1.1 if logistica else 0
+        gap = 3 if logistica else 0
+        total_h = th + gap + th_log
+        if tw <= zone_w and total_h <= zone_h:
             break
         fs -= 2
 
     tw = c.stringWidth(text, "Helvetica-Bold", fs)
     th = fs * 1.1
 
-    # Centrar en la zona
-    x = zone_x1 + (zone_w - tw) / 2
-    y = zone_y1 + (zone_h - th) / 2
-
-    # Fondo blanco para que el número sea visible sobre cualquier contenido
-    pad = 4
-    c.setFillColorRGB(1, 1, 1)
-    c.rect(x - pad, y - pad * 0.5, tw + pad * 2, th + pad, fill=1, stroke=0)
-    # Borde negro fino
-    c.setStrokeColorRGB(0, 0, 0)
-    c.setLineWidth(0.5)
-    c.rect(x - pad, y - pad * 0.5, tw + pad * 2, th + pad, fill=0, stroke=1)
-
-    c.setFillColorRGB(0, 0, 0)
-    c.drawString(x, y, text)
-
-    # Logistica debajo del numero (opcional)
     if logistica:
+        # Layout: logistica ARRIBA, numero ABAJO — ambos dentro de la zona superior derecha
         fs_log = max(8, int(fs * 0.38))
         c.setFont("Helvetica-Bold", fs_log)
         tw_log = c.stringWidth(logistica, "Helvetica-Bold", fs_log)
-        x_log = zone_x1 + (zone_w - tw_log) / 2
-        y_log = y - fs_log * 1.3
+        th_log = fs_log * 1.1
+        gap = 3
+        total_h = th + gap + th_log
+        # Centrar el bloque (logistica + numero) verticalmente en la zona
+        stack_y = zone_y1 + (zone_h - total_h) / 2
+        y_num = stack_y                      # numero abajo del bloque (PDF: y bajo = visualmente abajo)
+        y_log = stack_y + th + gap           # logistica arriba (PDF: y alto = visualmente arriba)
+
+        # Fondo blanco + borde para el numero
+        x_num = zone_x1 + (zone_w - tw) / 2
+        c.setFillColorRGB(1, 1, 1)
+        c.rect(x_num - pad, y_num - pad * 0.5, tw + pad * 2, th + pad, fill=1, stroke=0)
+        c.setStrokeColorRGB(0, 0, 0)
+        c.setLineWidth(0.5)
+        c.rect(x_num - pad, y_num - pad * 0.5, tw + pad * 2, th + pad, fill=0, stroke=1)
         c.setFillColorRGB(0, 0, 0)
+        c.setFont("Helvetica-Bold", fs)
+        c.drawString(x_num, y_num, text)
+
+        # Logistica arriba del numero, fondo blanco
+        x_log = zone_x1 + (zone_w - tw_log) / 2
+        c.setFillColorRGB(1, 1, 1)
+        c.rect(x_log - pad, y_log - pad * 0.5, tw_log + pad * 2, th_log + pad, fill=1, stroke=0)
+        c.setFillColorRGB(0, 0, 0)
+        c.setFont("Helvetica-Bold", fs_log)
         c.drawString(x_log, y_log, logistica)
+    else:
+        # Sin logistica: solo el numero centrado en la zona
+        x = zone_x1 + (zone_w - tw) / 2
+        y = zone_y1 + (zone_h - th) / 2
+
+        # Fondo blanco para que el número sea visible sobre cualquier contenido
+        c.setFillColorRGB(1, 1, 1)
+        c.rect(x - pad, y - pad * 0.5, tw + pad * 2, th + pad, fill=1, stroke=0)
+        # Borde negro fino
+        c.setStrokeColorRGB(0, 0, 0)
+        c.setLineWidth(0.5)
+        c.rect(x - pad, y - pad * 0.5, tw + pad * 2, th + pad, fill=0, stroke=1)
+
+        c.setFillColorRGB(0, 0, 0)
+        c.drawString(x, y, text)
 
     c.save()
     buf.seek(0)
