@@ -65,17 +65,11 @@ def get_logistica_map_from_fb():
             if not nro:
                 continue
             zona = d.get("zona", "").strip()
-            tipo = d.get("tipoEntrega", "").strip()
-            # Construir etiqueta compacta: zona si existe, o tipo, o ambos
-            if zona and tipo:
-                label = f"{zona}"
-            elif zona:
-                label = zona
-            elif tipo:
-                label = tipo
-            else:
+            # Solo mostrar logística si tiene zona asignada
+            # (tipoEntrega como "RESIDENCIAL" no es información de logística)
+            if not zona:
                 continue
-            lmap[nro] = label
+            lmap[nro] = zona
         return lmap
     except Exception as e:
         print(f"[logistica_map] Error consultando Firestore: {e}")
