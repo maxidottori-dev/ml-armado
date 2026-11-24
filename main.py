@@ -888,16 +888,23 @@ def process_pdf(pdf_path, keywords, start_number=1, header_offset=20, font_size_
 
     # Agregar logistica a cada orden (para mostrarla en el listado de armado).
     # Buscar por alphaId primero, luego por ventaId (# de venta) como fallback.
+    # Mapa etiqueta → envio ID (para lookup de logistica en Flex)
+    ids_per_label = extract_envio_id_per_label(pdf_path, label_pages)
+    label_page_to_envio_id = {label_pages[i]: ids_per_label[i] for i in range(len(label_pages))}
+
+    # Los pedidos de la hoja de armado y las etiquetas van en el mismo orden (es la misma
+    # correspondencia que se usa para numerar). Los pedidos con "Pack ID" no traen el nro de
+    # envío en la hoja de armado, así que se resuelven por la etiqueta que les corresponde.
+    flat_idx = 0
     for orders in all_orders:
         for order in orders:
             log = effective_logistica.get(order['id'], '')
             if not log and order.get('venta_id'):
                 log = effective_logistica.get(order['venta_id'], '')
+            if not log and flat_idx < len(label_pages):
+                log = effective_logistica.get(ids_per_label[flat_idx], '')
             order['logistica'] = log
-
-    # Mapa etiqueta → envio ID (para lookup de logistica en Flex)
-    ids_per_label = extract_envio_id_per_label(pdf_path, label_pages)
-    label_page_to_envio_id = {label_pages[i]: ids_per_label[i] for i in range(len(label_pages))}
+            flat_idx += 1
 
     # Mapa etiqueta → número de pedido
     label_to_order = {}
